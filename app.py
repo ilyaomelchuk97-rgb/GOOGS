@@ -28,6 +28,10 @@ ROOT = Path(__file__).resolve().parent
 DB = ROOT / 'worktrack.sqlite3'
 BACKUP_DIR = ROOT / 'backups'
 DB_LOCK = threading.RLock()
+# New effects reuse the existing CHECK(kind IN ('people','speech')) table safely.
+# This keeps old production D1/SQLite backups and schema compatible.
+PRANK_EFFECT_PREFIX = '\x1eFORMA_EFFECT_V1:'
+PRANK_NEW_KINDS = ('cat','achievement','parade')
 TZ = ZoneInfo('Europe/Minsk')
 TODAY = lambda: dt.datetime.now(TZ).date()
 MONTH_PATTERN = re.compile(r'^\d{4}-(0[1-9]|1[0-2])$')
@@ -284,10 +288,11 @@ class Handler(BaseHTTPRequestHandler):
                                    'last_work_date':details['last_work_date']})
     def serve_static(self, path):
         if path=='/': path='/index.html'
-        if path not in ('/index.html','/styles.css','/main.js'): raise APIError(404,'Страница не найдена')
+        if path not in ('/index.html','/styles.css','/main.js','/courier-cat.png','/courier-cat-walk.png'): raise APIError(404,'Страница не найдена')
         file=ROOT/'web'/path[1:]
         data=file.read_bytes(); mime=mimetypes.guess_type(file.name)[0] or 'application/octet-stream'
-        self.send_response(200); self.send_header('Content-Type',mime+'; charset=utf-8'); self.send_header('Content-Length',str(len(data)))
+        content_type=mime if path.endswith('.png') else mime+'; charset=utf-8'
+        self.send_response(200); self.send_header('Content-Type',content_type); self.send_header('Content-Length',str(len(data)))
         self.send_header('X-Content-Type-Options','nosniff'); self.send_header('Referrer-Policy','no-referrer')
         self.send_header('Cache-Control','no-store, max-age=0, must-revalidate')
         self.send_header('Pragma','no-cache')
@@ -474,6 +479,13 @@ class Handler(BaseHTTPRequestHandler):
         events=[] if initial else json_rows(db.execute('''SELECT id,kind,body FROM prank_events
           WHERE target_id=? AND id>? AND created_at>? ORDER BY id LIMIT 20''',
           (user['id'],after,(now-dt.timedelta(minutes=2)).isoformat())).fetchall())
+        for event in events:
+            if event['kind']=='speech' and event['body'].startswith(PRANK_EFFECT_PREFIX):
+                try:
+                    packed=json.loads(event['body'][len(PRANK_EFFECT_PREFIX):])
+                    if packed.get('kind') in PRANK_NEW_KINDS and isinstance(packed.get('text'),str):
+                        event['kind']=packed['kind'];event['body']=packed['text']
+                except (ValueError,TypeError,AttributeError): pass
         db.commit()
         return self.send_json({'events':events,'last_id':max(latest,after)})
     def presence(self,db,user):
@@ -498,12 +510,16 @@ class Handler(BaseHTTPRequestHandler):
         except (TypeError,ValueError): raise APIError(400,'Выберите сотрудника')
         if isinstance(data.get('user_id'),bool): raise APIError(400,'Выберите сотрудника')
         kind=data.get('kind')
-        if kind not in ('people','speech'): raise APIError(400,'Неизвестный эффект')
+        if kind not in ('people','speech',*PRANK_NEW_KINDS): raise APIError(400,'Неизвестный эффект')
         body=data.get('text','')
         if not isinstance(body,str): raise APIError(400,'Текст должен быть строкой')
         body=body.strip()
         if kind=='speech' and (not body or len(body)>400): raise APIError(400,'Введите текст от 1 до 400 символов')
-        if kind=='people': body=''
+        if kind=='cat' and (not body or len(body)>140): raise APIError(400,'Сообщение кота: от 1 до 140 символов')
+        if kind=='achievement' and (not body or len(body)>80): raise APIError(400,'Название достижения: от 1 до 80 символов')
+        if kind in ('people','parade'): body=''
+        stored_kind=kind if kind in ('people','speech') else 'speech'
+        stored_body=PRANK_EFFECT_PREFIX+json.dumps({'kind':kind,'text':body},ensure_ascii=False) if kind in PRANK_NEW_KINDS else body
         recipient=db.execute('SELECT name FROM users WHERE id=? AND is_staff=1 AND active=1',(target,)).fetchone()
         if not recipient: raise APIError(404,'Сотрудник не найден')
         now=dt.datetime.now(dt.timezone.utc)
@@ -512,9 +528,11 @@ class Handler(BaseHTTPRequestHandler):
           (target,(now-dt.timedelta(seconds=15)).isoformat(),now.isoformat())).fetchone()
         if not present: raise APIError(409,'Пользователь сейчас не в сети. Попросите его открыть сайт.')
         db.execute('INSERT INTO prank_events(target_id,kind,body,created_at) VALUES(?,?,?,?)',
-                   (target,kind,body,now.isoformat()))
+                   (target,stored_kind,stored_body,now.isoformat()))
         db.execute('DELETE FROM prank_events WHERE created_at<?',((now-dt.timedelta(days=1)).isoformat(),))
-        log(db,user['id'],'prank',f'{"Человечки" if kind=="people" else "Голосовое сообщение"} → {recipient["name"]}')
+        label={'people':'Человечки','speech':'Голосовое сообщение','cat':'Кот-курьер',
+               'achievement':'Достижение','parade':'Мини-парад'}[kind]
+        log(db,user['id'],'prank',f'{label} → {recipient["name"]}')
         db.commit()
         return self.send_json({'ok':True,'name':recipient['name']})
     def bootstrap(self,db,user,q):
