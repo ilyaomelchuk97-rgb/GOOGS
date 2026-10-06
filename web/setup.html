@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Первоначальная загрузка — Forma</title>
+<style>
+:root{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#152a32;background:#eef5f2}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:22px}
+main{width:min(720px,100%);background:#fff;border:1px solid #dce9e2;border-radius:22px;padding:clamp(22px,5vw,42px);box-shadow:0 20px 70px #17473716}
+h1{font-size:clamp(24px,4vw,34px);margin:8px 0 13px;line-height:1.18}p{color:#435961;line-height:1.62}.badge{display:inline-block;padding:7px 12px;border-radius:100px;background:#e7f6eb;color:#256646;font-size:12px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}
+.warning{padding:14px 16px;background:#fff7e7;border:1px solid #efddaf;border-radius:12px;color:#654b1a;margin:20px 0;line-height:1.5}
+label{display:block;font-weight:750;margin:18px 0 7px;font-size:14px}input[type=password]{width:100%;border:1px solid #c9d9d1;border-radius:12px;padding:13px 15px;font:inherit;background:white}input:focus{outline:3px solid #8eddb7;border-color:#278663}
+.drop{display:block;border:2px dashed #a8c9b7;border-radius:15px;padding:25px;text-align:center;background:#f7fbf8;cursor:pointer;transition:.15s}.drop.over{border-color:#26875d;background:#e9f8ee}.drop strong{display:block;color:#184f38;font-size:16px}.drop small{display:block;margin-top:7px;color:#637974;font-weight:400}.drop input{display:none}.picked{font-size:13px;color:#266b4e;min-height:22px;margin-top:8px}
+button{border:0;border-radius:12px;padding:15px 18px;color:white;background:#187655;font:inherit;font-weight:760;cursor:pointer;width:100%;margin-top:22px}button:hover{background:#145b43}button:disabled{cursor:not-allowed;opacity:.55}
+#result{margin-top:18px;padding:15px;border-radius:12px;display:none;line-height:1.55;white-space:pre-line}#result.ok{display:block;background:#e7f5e9;color:#1b6440}#result.error{display:block;background:#fff0ef;color:#943a35}a{color:#176849}footer{margin-top:28px;padding-top:18px;border-top:1px solid #e7efea;color:#71837b;font-size:12px;line-height:1.55}
+</style></head><body><main>
+<span class="badge">Одноразовая настройка</span>
+<h1>Перенос данных в Forma</h1>
+<p>Здесь вы один раз перетащите <b>личную ZIP-копию базы</b> с вашего компьютера. Это <b>не</b> архив кода для GitHub. Загрузка возможна только пока облачная база пуста.</p>
+<div class="warning"><b>Важно:</b> до отправки придумайте новый длинный пароль администратора. Он заменит старый пароль <code>admin</code> ещё до первого публичного входа. Архив на диск Render не записывается.</div>
+<form id="form" autocomplete="off">
+<label for="file">1. Резервная копия Forma (.zip)</label>
+<label class="drop" id="drop" for="file"><strong>Перетащите личный ZIP сюда</strong><small>или нажмите, чтобы выбрать файл с компьютера</small><input id="file" type="file" accept=".zip,application/zip" required></label>
+<div class="picked" id="picked"></div>
+<label for="key">2. Одноразовый ключ INITIAL_IMPORT_TOKEN из Render</label>
+<input id="key" type="password" minlength="32" required placeholder="Введите ключ из настроек Render" autocomplete="off">
+<label for="password">3. Новый пароль главного администратора</label>
+<input id="password" type="password" minlength="14" maxlength="128" required placeholder="14+ латинских символов, цифр и знаков без пробелов" autocomplete="new-password">
+<label for="confirm">4. Повторите новый пароль</label>
+<input id="confirm" type="password" minlength="14" maxlength="128" required placeholder="Повторите точно такой же пароль" autocomplete="new-password">
+<button id="submit" type="submit">Проверить и перенести данные</button>
+</form><div id="result" role="status" aria-live="polite"></div>
+<footer>После успешного переноса удалите <code>INITIAL_IMPORT_TOKEN</code> из Render, войдите в сайт под показанным логином и новым паролем, скачайте свежую резервную копию. Не отправляйте ZIP и ключи в GitHub или чат.</footer>
+</main><script>
+const f=document.getElementById('file'),drop=document.getElementById('drop'),picked=document.getElementById('picked'),out=document.getElementById('result'),btn=document.getElementById('submit');
+const show=(message,ok=false)=>{out.textContent=message;out.className=ok?'ok':'error'};
+const update=()=>picked.textContent=f.files[0]?'Выбран: '+f.files[0].name+' ('+Math.round(f.files[0].size/1024)+' КБ)':'';
+f.addEventListener('change',update);
+for(const event of ['dragenter','dragover'])drop.addEventListener(event,e=>{e.preventDefault();drop.classList.add('over')});
+for(const event of ['dragleave','drop'])drop.addEventListener(event,e=>{e.preventDefault();drop.classList.remove('over')});
+drop.addEventListener('drop',e=>{if(e.dataTransfer.files.length){f.files=e.dataTransfer.files;update()}});
+document.getElementById('form').addEventListener('submit',async e=>{
+ e.preventDefault();const file=f.files[0],key=document.getElementById('key').value,password=document.getElementById('password').value,confirm=document.getElementById('confirm').value;
+ if(!file||!file.name.toLowerCase().endsWith('.zip'))return show('Выберите личную ZIP-копию базы.');
+ if(file.size>25*1024*1024)return show('Архив больше 25 МБ. Не отправляйте его: потребуется другой способ переноса.');
+ if(password!==confirm)return show('Пароли не совпадают.');
+ if(!/^[\x21-\x7e]{14,128}$/.test(password))return show('Пароль: минимум 14 латинских символов, цифр и знаков без пробелов.');
+ btn.disabled=true;btn.textContent='Идёт проверка и перенос…';show('Не закрывайте вкладку. Если соединение прервётся, сначала проверьте, не были ли данные уже загружены.',true);
+ try{
+  const r=await fetch('/setup/import',{method:'POST',headers:{'Content-Type':'application/zip','X-Forma-Setup-Key':key,'X-Forma-New-Password':password},body:file,cache:'no-store'});
+  const data=await r.json();
+  if(!r.ok)throw Error(data.error||'Ошибка HTTP '+r.status);
+  document.getElementById('key').value='';document.getElementById('password').value='';document.getElementById('confirm').value='';
+  show('Готово! Данные перенесены. Сотрудников: '+data.counts.users+'; записей о работе: '+data.counts.entries+'.\nПериод: '+(data.first_work_date||'—')+' — '+(data.last_work_date||'—')+'.\nВойдите на главную страницу под логином '+data.username+' и НОВЫМ паролем. Затем удалите INITIAL_IMPORT_TOKEN из Render и скачайте новую резервную копию.',true);
+  btn.textContent='Перенос завершён';
+ }catch(err){show('Не удалось завершить: '+err.message+'\nНе загружайте архив повторно наугад. Если /setup больше не открывается, проверьте вход на главной странице.');btn.disabled=false;btn.textContent='Проверить и перенести данные'}
+});
+</script></body></html>
