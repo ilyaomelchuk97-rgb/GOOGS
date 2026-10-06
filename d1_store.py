@@ -54,8 +54,13 @@ class D1Connection:
         except urllib.error.HTTPError as exc:
             try: detail=json.load(exc)
             except Exception: detail={}
+            if not isinstance(detail,dict): detail={}
             if exc.code==409 or detail.get('conflict'):
                 raise sqlite3.IntegrityError('D1 rejected conflicting data') from exc
+            if exc.code==403:
+                if detail.get('error')=='Forbidden':
+                    raise RemoteError('Worker refused the bridge secret (403): BRIDGE_TOKEN on THIS Worker is missing or differs from D1_API_KEY in Render. No secret values were logged') from exc
+                raise RemoteError('Cloudflare returned 403 before the Forma Worker: check Access/WAF rules and D1_WORKER_URL; no secret values were logged') from exc
             raise RemoteError('Cloudflare D1 request failed (HTTP %d)'%exc.code) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise RemoteError('Cloudflare D1 connection failed; write outcome is unknown. Check data before retrying') from exc
