@@ -48,19 +48,24 @@ class D1Connection:
     def _post(self, path, payload):
         body=json.dumps(payload,ensure_ascii=False,default=str).encode()
         request=urllib.request.Request(self.url+path,body,headers={
-            'Content-Type':'application/json','X-Forma-Bridge':self.key},method='POST')
+            'Content-Type':'application/json', 'Accept':'application/json',
+            'User-Agent':'Forma-Render-Bridge/1.0',
+            'X-Forma-Bridge':self.key},method='POST')
         try:
             with urllib.request.urlopen(request,timeout=25) as response: result=json.load(response)
         except urllib.error.HTTPError as exc:
-            try: detail=json.load(exc)
-            except Exception: detail={}
+            raw=exc.read(32768)  # Never print response HTML or request headers.
+            try: detail=json.loads(raw)
+            except (ValueError,UnicodeDecodeError): detail={}
             if not isinstance(detail,dict): detail={}
             if exc.code==409 or detail.get('conflict'):
                 raise sqlite3.IntegrityError('D1 rejected conflicting data') from exc
             if exc.code==403:
                 if detail.get('error')=='Forbidden':
                     raise RemoteError('Worker refused the bridge secret (403): BRIDGE_TOKEN on THIS Worker is missing or differs from D1_API_KEY in Render. No secret values were logged') from exc
-                raise RemoteError('Cloudflare returned 403 before the Forma Worker: check Access/WAF rules and D1_WORKER_URL; no secret values were logged') from exc
+                if b'1010' in raw and b'cloudflare' in raw.lower():
+                    raise RemoteError('Cloudflare error 1010 blocked the request before the Worker; check Browser Integrity Check / security events. No secret values were logged') from exc
+                raise RemoteError('Cloudflare returned 403 before the Forma Worker: check Worker Access/WAF/security events and D1_WORKER_URL; no secret values were logged') from exc
             raise RemoteError('Cloudflare D1 request failed (HTTP %d)'%exc.code) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise RemoteError('Cloudflare D1 connection failed; write outcome is unknown. Check data before retrying') from exc
