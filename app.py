@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Локальное веб-приложение учёта работ. Python stdlib + SQLite; openpyxl нужен только для импорта/экспорта XLSX."""
+import base64
+import binascii
 import calendar
 import csv
+import ipaddress
 import datetime as dt
 import hashlib
 import hmac
@@ -28,7 +31,7 @@ ROOT = Path(__file__).resolve().parent
 DB = ROOT / 'worktrack.sqlite3'
 BACKUP_DIR = ROOT / 'backups'
 DB_LOCK = threading.RLock()
-BUILD_ID = '20261007-31'  # Public /health marker to verify which build Render actually serves.
+BUILD_ID = '20261007-34'  # Public /health marker to verify which build Render actually serves.
 # New effects reuse the existing CHECK(kind IN ('people','speech')) table safely.
 # This keeps old production D1/SQLite backups and schema compatible.
 PRANK_EFFECT_PREFIX = '\x1eFORMA_EFFECT_V1:'
@@ -90,9 +93,20 @@ def init_db():
         CREATE TABLE IF NOT EXISTS chat_messages (
           id INTEGER PRIMARY KEY, sender_id INTEGER NOT NULL REFERENCES users(id),
           recipient_id INTEGER REFERENCES users(id), body TEXT NOT NULL,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          style_json TEXT NOT NULL DEFAULT '{}');
         CREATE INDEX IF NOT EXISTS idx_chat_recipient ON chat_messages(recipient_id,id);
         CREATE INDEX IF NOT EXISTS idx_chat_sender ON chat_messages(sender_id,id);
+        CREATE TABLE IF NOT EXISTS chat_reads (
+          user_id INTEGER NOT NULL REFERENCES users(id), room_key TEXT NOT NULL,
+          last_read_id INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id,room_key));
+        CREATE TABLE IF NOT EXISTS chat_themes (
+          room_key TEXT PRIMARY KEY, theme_json TEXT NOT NULL,
+          updated_by INTEGER NOT NULL REFERENCES users(id),
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS user_avatars (
+          user_id INTEGER PRIMARY KEY REFERENCES users(id), image_b64 TEXT NOT NULL DEFAULT '',
+          mime TEXT NOT NULL DEFAULT '', image_url TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS sessions (
           token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
           expires_at TEXT NOT NULL);
@@ -109,6 +123,8 @@ def init_db():
           body TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS idx_prank_events_target ON prank_events(target_id,id);
         ''')
+        if 'style_json' not in [col[1] for col in db.execute('PRAGMA table_info(chat_messages)')]:
+            db.execute("ALTER TABLE chat_messages ADD COLUMN style_json TEXT NOT NULL DEFAULT '{}'")
         # Право администратора отдельно от принадлежности к сотрудникам: повышение
         # не удаляет личные работы и табель. Сводный отчёт отдельно фильтрует роль.
         if 'is_staff' not in [col[1] for col in db.execute('PRAGMA table_info(users)')]:
@@ -139,6 +155,38 @@ def valid_password(stored, password):
     except (ValueError, TypeError): return False
 
 def json_rows(rows): return [dict(r) for r in rows]
+CHAT_STYLE_KEYS = {'bubble', 'glow', 'glow_color', 'border_effect', 'flower', 'branch', 'logo'}
+def valid_chat_style(style):
+    """Strict finite palette / 20 variant indexes; never store arbitrary CSS or HTML."""
+    if style is None: return {}
+    if not isinstance(style,dict) or set(style)-CHAT_STYLE_KEYS:
+        raise APIError(400,'Некорректное оформление чата')
+    clean={}
+    for key in ('bubble','glow_color'):
+        if key in style:
+            color=style[key]
+            if not isinstance(color,str) or not re.fullmatch(r'#[0-9a-fA-F]{6}',color):
+                raise APIError(400,'Цвет должен быть в формате #RRGGBB')
+            clean[key]=color.lower()
+    if 'glow' in style:
+        if type(style['glow']) is not bool:raise APIError(400,'Некорректная настройка подсветки')
+        clean['glow']=style['glow']
+    for key in ('border_effect','flower','branch','logo'):
+        if key in style:
+            value=style[key]
+            if type(value) is not int or not 0<=value<=20:
+                raise APIError(400,'Номер украшения: от 0 до 20')
+            clean[key]=value
+    return clean
+
+def chat_theme_key(db,user,room):
+    if room=='general':return 'general'
+    try: peer=int(room)
+    except (TypeError,ValueError):raise APIError(400,'Некорректный собеседник')
+    if peer<=0 or str(peer)!=room or peer==user['id'] or not db.execute('SELECT 1 FROM users WHERE id=?',(peer,)).fetchone():
+        raise APIError(400,'Собеседник не найден')
+    return 'pair:'+str(min(user['id'],peer))+':'+str(max(user['id'],peer))
+
 def log(db, user_id, action, detail):
     db.execute('INSERT INTO activity(actor_id,action,detail) VALUES(?,?,?)',(user_id,action,detail[:350]))
 
@@ -226,7 +274,10 @@ class Handler(BaseHTTPRequestHandler):
     def user(self, db):
         token=self.auth_token()
         if not token: return None
-        return db.execute('''SELECT u.id,u.name,u.username,u.role,u.is_staff,u.active FROM sessions s JOIN users u ON u.id=s.user_id
+        return db.execute('''SELECT u.id,u.name,u.username,u.role,u.is_staff,u.active,
+            COALESCE(a.revision,0) avatar_revision,COALESCE(a.image_url,'') avatar_url,
+            CASE WHEN a.image_b64<>'' THEN 1 ELSE 0 END avatar_stored
+            FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN user_avatars a ON a.user_id=u.id
             WHERE s.token_hash=? AND s.expires_at>? AND u.active=1''',
             (hashlib.sha256(token.encode()).hexdigest(),dt.datetime.now(dt.timezone.utc).isoformat())).fetchone()
     def require(self, db, admin=False):
@@ -239,11 +290,11 @@ class Handler(BaseHTTPRequestHandler):
             raise APIError(401,'Войдите в аккаунт')
         if admin and user['role']!='admin': raise APIError(403,'Требуются права администратора')
         return user
-    def body(self):
+    def body(self,max_bytes=32768):
         if 'application/json' not in self.headers.get('Content-Type',''): raise APIError(415,'Требуется JSON')
         try:
             length=int(self.headers.get('Content-Length','0'))
-            if length<1 or length>32768: raise APIError(413,'Неверный размер запроса')
+            if length<1 or length>max_bytes: raise APIError(413,'Неверный размер запроса')
             data=json.loads(self.rfile.read(length))
             if not isinstance(data,dict): raise ValueError()
             return data
@@ -303,10 +354,11 @@ class Handler(BaseHTTPRequestHandler):
                                    'last_work_date':details['last_work_date']})
     def serve_static(self, path):
         if path=='/': path='/index.html'
-        if path not in ('/index.html','/styles.css','/main.js','/courier-cat.png','/courier-cat-walk.png'): raise APIError(404,'Страница не найдена')
+        if path not in ('/index.html','/styles.css','/main.js','/courier-cat.png','/courier-cat-walk.png',
+                            '/chat-flower.png','/chat-branch.png','/mingas-official-logo.webp'): raise APIError(404,'Страница не найдена')
         file=ROOT/'web'/path[1:]
         data=file.read_bytes(); mime=mimetypes.guess_type(file.name)[0] or 'application/octet-stream'
-        content_type=mime if path.endswith('.png') else mime+'; charset=utf-8'
+        content_type=mime if mime.startswith('image/') else mime+'; charset=utf-8'
         self.send_response(200); self.send_header('Content-Type',content_type); self.send_header('Content-Length',str(len(data)))
         self.send_header('X-Content-Type-Options','nosniff'); self.send_header('Referrer-Policy','no-referrer')
         self.send_header('Cache-Control','no-store, max-age=0, must-revalidate')
@@ -382,6 +434,11 @@ class Handler(BaseHTTPRequestHandler):
                 if path=='/api/bootstrap' and method=='GET': return self.bootstrap(db,user,q)
                 if path=='/api/chat' and method=='GET': return self.chat_list(db,user,q)
                 if path=='/api/chat' and method=='POST': return self.chat_send(db,user,self.body())
+                if path=='/api/chat/status' and method=='GET': return self.chat_status(db,user,q)
+                if path=='/api/chat/read' and method=='POST': return self.chat_read(db,user,self.body())
+                if path=='/api/chat/theme' and method=='POST': return self.chat_theme_save(db,user,self.body())
+                if path=='/api/avatar' and method=='POST': return self.avatar_save(db,user,self.body(150000))
+                if path.startswith('/api/avatar/') and method=='GET': return self.avatar_image(db,user,path)
                 if path=='/api/entries' and method=='POST': return self.save_entry(db,user,self.body())
                 if path=='/api/comments' and method=='POST': return self.save_comment(db,user,self.body())
                 if path.startswith('/api/entries/') and method=='PATCH': return self.edit_entry(db,user,path,self.body())
@@ -471,6 +528,9 @@ class Handler(BaseHTTPRequestHandler):
         with sqlite3.connect(':memory:') as source:
             source.deserialize(data)
             backup_tools.validate(source)  # Дополняет старые архивы пустой таблицей чата.
+            # Old external ZIPs may contain avatars; never restore them into current data.
+            source.execute('DELETE FROM user_avatars')
+            source.commit()
             if isinstance(db,d1_store.D1Connection): d1_store.replace_atomic(db,source)
             else: source.backup(db)
         if not isinstance(db,d1_store.D1Connection):
@@ -816,8 +876,11 @@ class Handler(BaseHTTPRequestHandler):
                 if boundary<=0 or str(boundary)!=before: raise APIError(400,'Некорректный номер сообщения')
                 older_params.append(boundary)
             condition=' AND m.id<?' if before is not None else ''
-            sql='''SELECT m.id,m.sender_id,m.recipient_id,m.body,m.created_at,u.name sender_name
+            sql='''SELECT m.id,m.sender_id,m.recipient_id,m.body,m.created_at,m.style_json,u.name sender_name,
+                     COALESCE(a.revision,0) avatar_revision,COALESCE(a.image_url,'') avatar_url,
+                     CASE WHEN a.image_b64<>'' THEN 1 ELSE 0 END avatar_stored
                      FROM chat_messages m JOIN users u ON u.id=m.sender_id
+                     LEFT JOIN user_avatars a ON a.user_id=u.id
                      WHERE '''+where+condition+' ORDER BY m.id DESC LIMIT 100'
             messages=json_rows(db.execute(sql,older_params).fetchall())[::-1]
             if messages:
@@ -828,14 +891,38 @@ class Handler(BaseHTTPRequestHandler):
             try: offset=int(after)
             except (TypeError,ValueError): raise APIError(400,'Некорректный номер сообщения')
             if offset<0 or str(offset)!=after: raise APIError(400,'Некорректный номер сообщения')
-            sql='''SELECT m.id,m.sender_id,m.recipient_id,m.body,m.created_at,u.name sender_name
+            sql='''SELECT m.id,m.sender_id,m.recipient_id,m.body,m.created_at,m.style_json,u.name sender_name,
+                     COALESCE(a.revision,0) avatar_revision,COALESCE(a.image_url,'') avatar_url,
+                     CASE WHEN a.image_b64<>'' THEN 1 ELSE 0 END avatar_stored
                      FROM chat_messages m JOIN users u ON u.id=m.sender_id
+                     LEFT JOIN user_avatars a ON a.user_id=u.id
                      WHERE '''+where+' AND m.id>? ORDER BY m.id LIMIT 100'
             messages=json_rows(db.execute(sql,params+[offset]).fetchall())
             has_more=None
-        people=json_rows(db.execute('''SELECT id,name,role FROM users
-                WHERE active=1 AND id<>? ORDER BY name''',(user['id'],)).fetchall())
-        self.send_json({'messages':messages,'users':people,'has_more':has_more})
+        people=json_rows(db.execute('''SELECT u.id,u.name,u.role,COALESCE(a.revision,0) avatar_revision,
+                COALESCE(a.image_url,'') avatar_url,
+                CASE WHEN a.image_b64<>'' THEN 1 ELSE 0 END avatar_stored
+                FROM users u LEFT JOIN user_avatars a ON a.user_id=u.id
+                WHERE u.active=1 AND u.id<>? ORDER BY u.name''',(user['id'],)).fetchall())
+        for message in messages:
+            try: message['style']=valid_chat_style(json.loads(message.pop('style_json') or '{}'))
+            except (ValueError,TypeError,APIError):message['style']={}
+        key=chat_theme_key(db,user,room)
+        theme_row=db.execute('SELECT theme_json,updated_at FROM chat_themes WHERE room_key=?',(key,)).fetchone()
+        try: theme=valid_chat_style(json.loads(theme_row['theme_json'])) if theme_row else {}
+        except (ValueError,TypeError,APIError):theme={}
+        self.send_json({'messages':messages,'users':people,'has_more':has_more,
+                        'theme':theme,'theme_updated_at':theme_row['updated_at'] if theme_row else None})
+    def chat_theme_save(self,db,user,data):
+        key=chat_theme_key(db,user,data.get('room'))
+        theme=valid_chat_style(data.get('style'))
+        db.execute('''INSERT INTO chat_themes(room_key,theme_json,updated_by)
+            VALUES(?,?,?) ON CONFLICT(room_key) DO UPDATE SET
+            theme_json=excluded.theme_json,updated_by=excluded.updated_by,
+            updated_at=CURRENT_TIMESTAMP''',
+            (key,json.dumps(theme,separators=(',',':')),user['id']))
+        db.commit()
+        self.send_json({'ok':True,'theme':theme})
     def chat_send(self,db,user,data):
         recipient=data.get('recipient_id')
         if recipient is not None:
@@ -848,10 +935,117 @@ class Handler(BaseHTTPRequestHandler):
         text=text.strip()
         if not text or len(text)>2000 or '\x00' in text:
             raise APIError(400,'Сообщение: от 1 до 2000 символов')
-        cursor=db.execute('INSERT INTO chat_messages(sender_id,recipient_id,body) VALUES(?,?,?)',
-                          (user['id'],recipient,text))
+        style=valid_chat_style(data.get('style',{}))
+        cursor=db.execute('INSERT INTO chat_messages(sender_id,recipient_id,body,style_json) VALUES(?,?,?,?)',
+                          (user['id'],recipient,text,json.dumps(style,separators=(',',':'))))
         db.commit()
         self.send_json({'ok':True,'id':cursor.lastrowid})
+    def chat_status(self,db,user,q):
+        """Unread counters and new-message notices; first poll never replays old toasts."""
+        uid=user['id']
+        direct=json_rows(db.execute('''SELECT m.sender_id peer_id,COUNT(*) unread
+            FROM chat_messages m LEFT JOIN chat_reads r
+              ON r.user_id=? AND r.room_key=('dm:' || m.sender_id)
+            WHERE m.recipient_id=? AND m.id>COALESCE(r.last_read_id,0)
+            GROUP BY m.sender_id''',(uid,uid)).fetchall())
+        general=db.execute('''SELECT COUNT(*) FROM chat_messages m LEFT JOIN chat_reads r
+              ON r.user_id=? AND r.room_key='general'
+            WHERE m.recipient_id IS NULL AND m.sender_id<>?
+              AND m.id>COALESCE(r.last_read_id,0)''',(uid,uid)).fetchone()[0]
+        latest=db.execute('SELECT COALESCE(MAX(id),0) FROM chat_messages').fetchone()[0]
+        after=q.get('after',[None])[0]
+        notices=[]
+        if after is not None:
+            try: cursor=int(after)
+            except (TypeError,ValueError): raise APIError(400,'Некорректный номер сообщения')
+            if cursor<0 or cursor>9223372036854775807 or str(cursor)!=after:
+                raise APIError(400,'Некорректный номер сообщения')
+            notices=json_rows(db.execute('''SELECT m.id,m.sender_id,m.recipient_id,u.name sender_name
+                FROM chat_messages m JOIN users u ON u.id=m.sender_id
+                WHERE m.id>? AND m.sender_id<>?
+                  AND (m.recipient_id=? OR m.recipient_id IS NULL)
+                ORDER BY m.id LIMIT 50''',(cursor,uid,uid)).fetchall())
+        # If there are more than 50 notices, the next poll continues instead of skipping them.
+        next_cursor=notices[-1]['id'] if len(notices)==50 else latest
+        self.send_json({'direct':{str(x['peer_id']):x['unread'] for x in direct},
+                        'general':general,'notices':notices,'cursor':next_cursor})
+    def chat_read(self,db,user,data):
+        room=data.get('room')
+        if room=='general':
+            key='general';latest=db.execute('''SELECT COALESCE(MAX(id),0) FROM chat_messages
+                WHERE recipient_id IS NULL''').fetchone()[0]
+        else:
+            try: peer=int(room)
+            except (TypeError,ValueError): raise APIError(400,'Некорректный собеседник')
+            if peer<=0 or peer==user['id'] or str(peer)!=room or not db.execute('SELECT id FROM users WHERE id=?',(peer,)).fetchone():
+                raise APIError(400,'Некорректный собеседник')
+            key='dm:'+str(peer)
+            latest=db.execute('''SELECT COALESCE(MAX(id),0) FROM chat_messages
+                WHERE (sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)''',
+                (user['id'],peer,peer,user['id'])).fetchone()[0]
+        if 'up_to' in data:
+            visible=data['up_to']
+            if type(visible) is not int or visible<0 or visible>latest:
+                raise APIError(400,'Некорректный номер показанного сообщения')
+            latest=visible
+        db.execute('''INSERT INTO chat_reads(user_id,room_key,last_read_id) VALUES(?,?,?)
+            ON CONFLICT(user_id,room_key) DO UPDATE SET
+            last_read_id=MAX(chat_reads.last_read_id,excluded.last_read_id)''',(user['id'],key,latest))
+        db.commit();self.send_json({'ok':True,'last_read_id':latest})
+    def avatar_save(self,db,user,data):
+        image='';mime='';url=''
+        if data.get('remove') is True:
+            pass
+        elif 'url' in data:
+            url=data['url']
+            if not isinstance(url,str) or not 1<=len(url)<=800 or url!=url.strip() or any(ord(c)<32 for c in url):
+                raise APIError(400,'Введите корректную HTTPS-ссылку на изображение')
+            try:
+                parsed=urlparse(url)
+                allowed=parsed.scheme=='https' and bool(parsed.hostname) and not parsed.username and not parsed.password and parsed.port in (None,443)
+            except ValueError: allowed=False
+            if not allowed:
+                raise APIError(400,'Разрешены только прямые HTTPS-ссылки без логина и пароля')
+            host=parsed.hostname.lower().rstrip('.')
+            if '.' not in host or host.endswith(('.local','.internal','.localhost')):
+                raise APIError(400,'Укажите публичную HTTPS-ссылку на изображение')
+            try:
+                address=ipaddress.ip_address(host)
+                if not address.is_global: raise APIError(400,'Недоступный адрес изображения')
+            except ValueError: pass
+        elif 'image_b64' in data:
+            encoded=data['image_b64']
+            if not isinstance(encoded,str) or not 1<=len(encoded)<=130000:
+                raise APIError(413,'Аватар слишком большой (после сжатия — до 90 КБ)')
+            try: raw=base64.b64decode(encoded,validate=True)
+            except (ValueError,binascii.Error): raise APIError(400,'Некорректный файл изображения')
+            if not raw or len(raw)>90000: raise APIError(413,'Аватар слишком большой (до 90 КБ)')
+            if raw.startswith(b'\x89PNG\r\n\x1a\n') and raw[12:16]==b'IHDR':mime='image/png'
+            elif raw.startswith(b'\xff\xd8\xff'):mime='image/jpeg'
+            elif raw[:4]==b'RIFF' and raw[8:12]==b'WEBP':mime='image/webp'
+            else:raise APIError(400,'Аватар должен быть PNG, JPEG или WebP')
+            image=base64.b64encode(raw).decode('ascii')
+        else:raise APIError(400,'Выберите файл изображения или укажите HTTPS-ссылку')
+        db.execute('''INSERT INTO user_avatars(user_id,image_b64,mime,image_url,revision)
+            VALUES(?,?,?,?,1) ON CONFLICT(user_id) DO UPDATE SET
+            image_b64=excluded.image_b64,mime=excluded.mime,image_url=excluded.image_url,
+            revision=user_avatars.revision+1''',(user['id'],image,mime,url))
+        db.commit()
+        revision=db.execute('SELECT revision FROM user_avatars WHERE user_id=?',(user['id'],)).fetchone()[0]
+        self.send_json({'ok':True,'avatar_revision':revision,'avatar_url':url,'avatar_stored':bool(image)})
+    def avatar_image(self,db,user,path):
+        try: uid=int(path.rsplit('/',1)[1])
+        except (TypeError,ValueError): raise APIError(400,'Некорректный пользователь')
+        if uid<=0 or str(uid)!=path.rsplit('/',1)[1]: raise APIError(400,'Некорректный пользователь')
+        row=db.execute('SELECT image_b64,mime FROM user_avatars WHERE user_id=?',(uid,)).fetchone()
+        if not row or not row['image_b64']: raise APIError(404,'Аватар не найден')
+        raw=base64.b64decode(row['image_b64'])
+        self.send_response(200)
+        self.send_header('Content-Type',row['mime'])
+        self.send_header('Content-Length',str(len(raw)))
+        self.send_header('Cache-Control','private, no-store')
+        self.send_header('X-Content-Type-Options','nosniff')
+        self.end_headers();self.wfile.write(raw)
     def report_data(self,db,month):
         first,last=month_range(month)
         rows=json_rows(db.execute('''SELECT t.id task_id,t.title,t.unit,t.norm,t.category,u.id user_id,u.name,

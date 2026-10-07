@@ -12,10 +12,111 @@ function logDate(d){if(!d)return '';return new Date(d.replace(' ','T')+'Z').toLo
 function dayTime(d){if(!d)return '';const date=new Date(d.replace(' ','T')+'Z');return logDate(d)+' · '+date.toLocaleTimeString('ru-RU',{timeZone:'Europe/Minsk',hour:'2-digit',minute:'2-digit'})}
 function dateShift(date,days){let d=new Date(date+'T12:00:00');d.setDate(d.getDate()+days);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 function dayType(day){const d=new Date(day+'T12:00:00').getDay();return d!==0&&d!==6}
-const S={user:null,data:null,month:null,today:null,page:'overview',report:null,logs:null,search:'',userFilter:'',categoryFilter:'',menuOpen:false,modal:null,attendanceChoice:'absent',prankOnline:[],prankTarget:null,presencePeople:[],presenceOnline:false,presenceOpen:false,backupStatus:null,backupPreview:null,backupFile:null,chatRoom:'general',chatData:null};
+const S={user:null,data:null,month:null,today:null,page:'overview',report:null,logs:null,search:'',userFilter:'',categoryFilter:'',menuOpen:false,modal:null,attendanceChoice:'absent',prankOnline:[],prankTarget:null,presencePeople:[],presenceOnline:false,presenceOpen:false,backupStatus:null,backupPreview:null,backupFile:null,chatRoom:'general',chatData:null,messageStyle:{},roomDraft:null,chatDesignOpen:null,unread:{direct:{},general:0}};
+const avatarCache=new Map();let chatStatusCursor=null,chatStatusBusy=false;
+function avatarHTML(person){
+ const name=esc(initials(person?.name)),url=person?.avatar_url;
+ if(url&&/^https:\/\//i.test(url))return `<span class="avatar-initials">${name}</span><img class="avatar-photo" src="${esc(url)}" alt="" referrerpolicy="no-referrer" loading="lazy">`;
+ if(person?.avatar_stored&&person?.id)return `<span class="avatar-initials">${name}</span><img class="avatar-photo" data-avatar-id="${Number(person.id)}" data-avatar-revision="${Number(person.avatar_revision)||0}" alt="" hidden>`;
+ return `<span class="avatar-initials">${name}</span>`;
+}
+function clearAvatarCache(){for(const item of avatarCache.values())if(item.url)URL.revokeObjectURL(item.url);avatarCache.clear()}
+async function avatarObjectUrl(uid,revision){
+ let item=avatarCache.get(uid);
+ if(item?.revision===revision)return item.url||item.pending;
+ if(item?.url)URL.revokeObjectURL(item.url);
+ item={revision,url:null,pending:null};avatarCache.set(uid,item);
+ item.pending=(async()=>{
+  const path='/api/avatar/'+uid,options={credentials:'same-origin',headers:authToken?{'X-Forma-Session':authToken}:{}};
+  let response=await fetch(authedPath(path),options);
+  if(response.status===401&&authToken&&!tokenInUrl)response=await fetch(path+'?forma_ticket='+encodeURIComponent(authToken),options);
+  if(!response.ok)return null;
+  const url=URL.createObjectURL(await response.blob());
+  if(avatarCache.get(uid)!==item){URL.revokeObjectURL(url);return null}
+  item.url=url;return url;
+ })();
+ return item.pending;
+}
+function hydrateAvatars(){
+ document.querySelectorAll('.avatar-photo').forEach(img=>{
+  img.addEventListener('error',()=>{img.hidden=true},{once:true});
+  if(!img.dataset.avatarId)return;
+  const uid=Number(img.dataset.avatarId),revision=Number(img.dataset.avatarRevision);
+  avatarObjectUrl(uid,revision).then(url=>{
+   if(url&&img.isConnected&&Number(img.dataset.avatarRevision)===revision){img.src=url;img.hidden=false}
+  }).catch(()=>{img.hidden=true});
+ });
+}
+function unreadCount(room){return room==='general'?Number(S.unread.general||0):room==='all'?
+ Number(S.unread.general||0)+Object.values(S.unread.direct||{}).reduce((sum,n)=>sum+Number(n),0):
+ Number(S.unread.direct?.[room]||0)}
+function unreadBadge(room){const n=unreadCount(room);return `<span class="chat-unread" data-unread-room="${esc(room)}" ${n?'':'hidden'}>${n>99?'99+':n}</span>`}
+function updateUnreadUI(){document.querySelectorAll('[data-unread-room]').forEach(badge=>{const n=unreadCount(badge.dataset.unreadRoom);badge.hidden=!n;badge.textContent=n>99?'99+':String(n)})}
+// Safe, fixed catalogue: 20 effects + 20 flowers + 20 branches + 20 logo frames.
+const CHAT_STYLE_CATEGORIES={
+ border_effect:'Эффект рамки',flower:'Цветы',branch:'Ветви',logo:'Значок «УП МИНГАЗ»'
+};
+const CHAT_STYLE_NAMES={border_effect:[
+ 'Нежный контур','Пунктир','Двойной ободок','Розовые искры','Изумрудная линия',
+ 'Лунное свечение','Радужная кромка','Золотая нить','Полярное сияние','Мерцающие точки',
+ 'Волшебная рамка','Ледяная грань','Солнечный ореол','Сиреневая дымка','Бирюзовые огни',
+ 'Штриховая рамка','Праздничный кант','Звёздный контур','Весенний отблеск','Северное сияние'
+]};
+function normalizedStyle(raw){
+ const s=raw&&typeof raw==='object'&&!Array.isArray(raw)?raw:{},v={};
+ for(const key of ['bubble','glow_color'])if(/^#[0-9a-f]{6}$/i.test(s[key]))v[key]=s[key];
+ if(typeof s.glow==='boolean')v.glow=s.glow;
+ for(const key of Object.keys(CHAT_STYLE_CATEGORIES))if(Number.isInteger(s[key])&&s[key]>=0&&s[key]<=20)v[key]=s[key];
+ return v;
+}
+function colorInk(hex){const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);return (.2126*r+.7152*g+.0722*b)<138?'#fff':'#203d4b'}
+function chatPaint(raw,frame=false){
+ const s=normalizedStyle(raw),color=s.bubble||'#e0f5e9',accent=s.glow_color||'#c5659f';
+ const css=`--bubble-bg:${color};--bubble-ink:${colorInk(color)};--effect-color:${accent};--glow-color:${accent}`;
+ return {style:css,classes:`${Object.keys(s).length?'chat-painted':''} effect-${s.border_effect||0} ${s.glow?'glow-on':''}`};
+}
+function chatDecor(raw,frame=false){
+ const s=normalizedStyle(raw);
+ return ['flower','branch','logo'].map(kind=>{
+  const variant=s[kind]||0;if(!variant)return '';
+  const src={flower:'/chat-flower.png',branch:'/chat-branch.png',logo:'/mingas-official-logo.webp'}[kind];
+  return `<span class="chat-ornament ornament-${kind} ornament-${kind}-${variant} ${frame?'frame-ornament':''}" aria-hidden="true"><img src="${src}" alt="" loading="lazy"></span>`;
+ }).join('');
+}
+function chatEditorHTML(target){
+ const draft=normalizedStyle(target==='room'?(S.roomDraft??S.chatData?.theme):S.messageStyle);
+ const label=target==='room'?'Рамка этой беседы · видна всем участникам':'Оформление новых сообщений · видно получателям';
+ const select=(key,title)=>`<label>${title}<select data-style-field="${key}">${Array.from({length:21},(_,v)=>`<option value="${v}" ${Number(draft[key]||0)===v?'selected':''}>${v===0?'Выключено':`${v}. ${key==='border_effect'?CHAT_STYLE_NAMES.border_effect[v-1]:'Вариант '+v}`}</option>`).join('')}</select></label>`;
+ const preview=target==='room'?'Так будет выглядеть рамка переписки':'Так будет выглядеть новое сообщение';
+ const painted=chatPaint(draft,target==='room');
+ return `<div class="chat-style-title"><b>${esc(label)}</b><span>20 вариантов в каждой категории</span></div>
+ <div class="chat-style-controls"><label>Цвет облачка / фона<input type="color" data-style-field="bubble" value="${draft.bubble||'#e0f5e9'}"></label>
+ <label class="chat-glow-check"><input type="checkbox" data-style-field="glow" ${draft.glow?'checked':''}> Включить подсветку</label>
+ <label>Цвет подсветки и рамки<input type="color" data-style-field="glow_color" value="${draft.glow_color||'#c5659f'}"></label>
+ ${Object.entries(CHAT_STYLE_CATEGORIES).map(([key,title])=>select(key,title)).join('')}</div>
+ <div class="chat-style-preview ${painted.classes}" style="${painted.style}"><span>${preview}</span>${chatDecor(draft,target==='room')}</div>
+ <div class="chat-style-actions"><button type="button" class="btn secondary" data-action="chat-style-reset">Сбросить оформление</button>${target==='room'?'<button type="button" class="btn primary" data-action="chat-style-save-room">Показать всем участникам</button>':'<small>Применится при отправке следующего сообщения.</small>'}</div>`;
+}
+function toggleChatEditor(target){
+ if(S.page!=='chat')return;
+ const old=$('#chat-style-editor');if(old)old.remove();
+ if(S.chatDesignOpen===target){S.chatDesignOpen=null;S.roomDraft=null;return}
+ S.chatDesignOpen=target;
+ if(target==='room')S.roomDraft={...normalizedStyle(S.chatData?.theme)};
+ $('#chat-form')?.insertAdjacentHTML('beforebegin',`<div class="chat-style-editor" id="chat-style-editor">${chatEditorHTML(target)}</div>`);
+}
+function refreshChatEditor(){const editor=$('#chat-style-editor');if(editor&&S.chatDesignOpen)editor.innerHTML=chatEditorHTML(S.chatDesignOpen)}
+function applyRoomTheme(){
+ const card=$('.chat-layout');if(!card||!S.chatData)return;
+ const paint=chatPaint(S.chatData.theme,true);
+ card.className='chat-layout card '+paint.classes;
+ card.style.cssText=paint.style;
+ const decorations=$('#chat-frame-decor');if(decorations)decorations.innerHTML=chatDecor(S.chatData.theme,true);
+}
+function resetChatSession(){chatStatusCursor=null;chatStatusBusy=false;S.unread={direct:{},general:0};S.messageStyle={};S.roomDraft=null;S.chatDesignOpen=null;clearAvatarCache()}
 let authToken='',tokenInUrl=false;
 try{authToken=sessionStorage.getItem('forma-session')||''}catch{}
-function setToken(token){authToken=token||'';tokenInUrl=false;try{if(authToken)sessionStorage.setItem('forma-session',authToken);else sessionStorage.removeItem('forma-session')}catch{}}
+function setToken(token){if((token||'')!==authToken)resetChatSession();authToken=token||'';tokenInUrl=false;try{if(authToken)sessionStorage.setItem('forma-session',authToken);else sessionStorage.removeItem('forma-session')}catch{}}
 function authedPath(path){return tokenInUrl&&authToken?path+(path.includes('?')?'&':'?')+'forma_ticket='+encodeURIComponent(authToken):path}
 async function api(path,method='GET',body){
  const opt={method,credentials:'same-origin',headers:{}};
@@ -37,7 +138,7 @@ async function init(){try{let session=await api('/api/session');if(!session.user
 async function load(){S.data=await api('/api/bootstrap?month='+S.month);S.user=S.data.user;S.today=S.data.today;if(S.page==='report'&&isAdmin())S.report=await api('/api/report?month='+S.month);if(S.page==='activity'&&isAdmin())S.logs=await api('/api/logs');if(S.page==='backup'&&isAdmin())S.backupStatus=await api('/api/backup/status');if(S.page==='chat')await fetchChat(true);render()}
 function isAdmin(){return S.user?.role==='admin'}
 function showLogin(){S.user=null;S.menuOpen=false;document.body.classList.remove('menu-open');$('#app').innerHTML=`<div class="login-screen"><div class="login-art"><div class="quote"><div class="hero-kicker login-kicker"><span class="login-pulse-dot" aria-hidden="true"></span>Пространство вашей команды</div><h1>Каждый день —<br><em>результат.</em></h1><p>Отмечайте выполненную работу, следите за графиком и собирайте отчётность без бесконечных таблиц.</p><div class="login-preview">${[31,54,43,72,61,85,64,105,94,127,109,136].map((h,i)=>`<i style="height:${h}px;opacity:${.35+i*.052}"></i>`).join('')}</div></div></div><div class="login-panel"><form id="login-form" class="login-box"><span class="pill">◉ &nbsp;Добро пожаловать</span><h2>Рады вас видеть!</h2><p>Войдите в личный кабинет, чтобы продолжить работу с командой.</p><div class="field"><label for="login-username">Логин</label><input id="login-username" name="username" placeholder="Ваш логин" autocomplete="username" required autofocus></div><div class="field"><label for="login-password">Пароль</label><input id="login-password" name="password" type="password" placeholder="Введите пароль" autocomplete="current-password" required></div><div class="form-error" id="login-error"></div><button type="submit" class="btn primary">Войти в систему ${ic('arrow')}</button><div class="login-foot">Для входа администратора: логин <b>admin</b>, пароль <b>admin</b>. Данные сотрудников — в файле <b>initial_credentials.txt</b>.</div></form></div></div>`}
-const NAV=[['overview','Обзор','grid'],['entries','Мои работы','clipboard'],['chat','Чат','message'],['report','Сводный отчёт','chart'],['attendance','Табель','calendar'],['team','Сотрудники','users'],['catalog','Каталог работ','layers'],['activity','Журнал действий','history'],['backup','Резервные копии','download'],['prank','Прикол','party']];
+const NAV=[['overview','Обзор','grid'],['chat','Чат','message'],['entries','Мои работы','clipboard'],['report','Сводный отчёт','chart'],['attendance','Табель','calendar'],['team','Сотрудники','users'],['catalog','Каталог работ','layers'],['activity','Журнал действий','history'],['backup','Резервные копии','download'],['prank','Прикол','party']];
 function presenceListHTML(){
  const people=S.presencePeople;
  return `<div class="presence-popover-head"><b>Сейчас в сети</b><span>${people.length}</span></div><div class="presence-people">${people.map(u=>`<div class="presence-person"><div class="avatar">${esc(initials(u.name))}</div><span class="presence-person-name">${esc(u.name)}${u.id===S.user?.id?'<small>Вы</small>':''}${u.role==='admin'&&u.name.toLowerCase()!=='администратор'?'<small>Администратор</small>':''}</span><span class="presence-person-dot" aria-label="В сети"></span></div>`).join('')}</div>`;
@@ -65,8 +166,8 @@ async function refreshPresence(){
  if(!S.presenceOnline)S.presenceOpen=false;
  presenceSeen=Date.now();updatePresenceWidget();
 }
-function navList(){return NAV.filter(([id])=>isAdmin()||!['report','team','catalog','activity','backup','prank'].includes(id)).map(([id,label,icon])=>`<button class="nav-link ${S.page===id?'active':''}" data-nav="${id}">${ic(icon)}<span>${label}</span></button>`).join('')}
-function render(){if(!S.user)return showLogin();document.body.classList.toggle('menu-open',S.menuOpen);const label=NAV.find(n=>n[0]===S.page)?.[1]||'Обзор';$('#app').innerHTML=`<div class="layout"><div id="sidebar-backdrop" class="sidebar-backdrop ${S.menuOpen?'show':''}" data-action="close-menu" aria-hidden="true"></div><aside id="app-sidebar" class="sidebar ${S.menuOpen?'open':''}" aria-label="Навигация по разделам" aria-hidden="${!S.menuOpen}" ${S.menuOpen?'':'inert'}><div class="side-top"><div class="side-title">Отчёт по работе <span>ГООГС СЭОГС</span></div><button class="sidebar-close icon-btn" type="button" data-action="close-menu" title="Закрыть меню" aria-label="Закрыть меню">${ic('x')}</button></div><div class="side-section">Рабочее пространство</div><nav class="nav">${navList()}</nav><div class="side-bottom"><div class="side-note"><div class="note-icon">${ic('sparkle')}</div><b>Всё под контролем</b><p>Работы, табель и отчёты — в одном удобном пространстве команды.</p></div><div class="side-user"><div class="avatar">${esc(initials(S.user.name))}</div><div class="meta"><b>${esc(S.user.name)}</b><small>${isAdmin()?'Администратор':'Сотрудник'}</small></div><button title="Выйти" data-action="logout">${ic('logout')}</button></div></div></aside><main class="main"><header class="topbar"><button id="menu-toggle" class="icon-btn mobile-menu" type="button" data-action="menu" title="Открыть меню" aria-label="Открыть меню" aria-controls="app-sidebar" aria-expanded="${S.menuOpen}">${ic('menu')}</button><div class="breadcrumbs">Рабочее пространство <span>/</span> <span>${esc(label)}</span></div>${presenceHTML()}<div class="topbar-right"><span class="top-date">${ic('calendar')} ${new Date(S.today+'T12:00:00').toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric'})}</span><div class="top-divider"></div>${isAdmin()?`<button class="icon-btn" data-modal="password" title="Сменить пароль">${ic('lock')}</button>`:''}<div class="avatar">${esc(initials(S.user.name))}</div></div></header><div class="content">${pageHTML()}</div></main></div><div id="modal-root"></div>`;if(S.modal)renderModal()}
+function navList(){return NAV.filter(([id])=>isAdmin()||!['report','team','catalog','activity','backup','prank'].includes(id)).map(([id,label,icon])=>`<button class="nav-link ${S.page===id?'active':''}" data-nav="${id}">${ic(icon)}<span>${label}</span>${id==='chat'?unreadBadge('all'):''}</button>`).join('')}
+function render(){if(!S.user)return showLogin();document.body.classList.toggle('menu-open',S.menuOpen);const label=NAV.find(n=>n[0]===S.page)?.[1]||'Обзор';$('#app').innerHTML=`<div class="layout"><div id="sidebar-backdrop" class="sidebar-backdrop ${S.menuOpen?'show':''}" data-action="close-menu" aria-hidden="true"></div><aside id="app-sidebar" class="sidebar ${S.menuOpen?'open':''}" aria-label="Навигация по разделам" aria-hidden="${!S.menuOpen}" ${S.menuOpen?'':'inert'}><div class="side-top"><div class="side-title">Отчёт по работе <span>ГООГС СЭОГС</span></div><button class="sidebar-close icon-btn" type="button" data-action="close-menu" title="Закрыть меню" aria-label="Закрыть меню">${ic('x')}</button></div><div class="side-section">Рабочее пространство</div><nav class="nav">${navList()}</nav><div class="side-bottom"><div class="side-note"><div class="note-icon">${ic('sparkle')}</div><b>Всё под контролем</b><p>Работы, табель и отчёты — в одном удобном пространстве команды.</p></div><div class="side-user"><div class="avatar">${esc(initials(S.user.name))}</div><div class="meta"><b>${esc(S.user.name)}</b><small>${isAdmin()?'Администратор':'Сотрудник'}</small></div><button title="Выйти" data-action="logout">${ic('logout')}</button></div></div></aside><main class="main"><header class="topbar"><button id="menu-toggle" class="icon-btn mobile-menu" type="button" data-action="menu" title="Открыть меню" aria-label="Открыть меню" aria-controls="app-sidebar" aria-expanded="${S.menuOpen}">${ic('menu')}</button><div class="breadcrumbs">Рабочее пространство <span>/</span> <span>${esc(label)}</span></div>${presenceHTML()}<div class="topbar-right"><span class="top-date">${ic('calendar')} ${new Date(S.today+'T12:00:00').toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric'})}</span><div class="top-divider"></div>${isAdmin()?`<button class="icon-btn" data-modal="password" title="Сменить пароль">${ic('lock')}</button>`:''}<button type="button" class="avatar avatar-edit-trigger" data-modal="avatar" title="Установить или изменить аватар" aria-label="Изменить мой аватар">${avatarHTML(S.user)}</button></div></header><div class="content">${pageHTML()}</div></main></div><div id="modal-root"></div>`;if(S.modal)renderModal();hydrateAvatars()}
 function setMenuOpen(open){
  S.menuOpen=!!open;
  const sidebar=$('#app-sidebar'),backdrop=$('#sidebar-backdrop'),trigger=$('#menu-toggle');
@@ -163,28 +264,31 @@ function entriesPage(){
 let chatTimer=null,chatBusy=false;
 function chatRoomsHTML(){
  const people=S.chatData?.users||[];
- const group=`<button type="button" class="chat-room ${S.chatRoom==='general'?'selected':''}" data-action="chat-room" data-room="general"><span class="chat-room-avatar group">${ic('users')}</span><span><b>Общий чат</b><small>Вся команда</small></span></button>`;
- return group+people.map(u=>`<button type="button" class="chat-room ${S.chatRoom===String(u.id)?'selected':''}" data-action="chat-room" data-room="${u.id}"><span class="chat-room-avatar">${esc(initials(u.name))}</span><span><b>${esc(u.name)}</b><small>${u.role==='admin'?'Администратор':'Сотрудник'}${S.presencePeople.some(p=>p.id===u.id)?' · в сети':''}</small></span></button>`).join('');
+ const group=`<button type="button" class="chat-room ${S.chatRoom==='general'?'selected':''}" data-action="chat-room" data-room="general"><span class="chat-room-avatar group">${ic('users')}</span><span class="chat-room-meta"><span class="chat-room-name"><b>Общий чат</b>${unreadBadge('general')}</span><small>Вся команда</small></span></button>`;
+ return group+people.map(u=>`<button type="button" class="chat-room ${S.chatRoom===String(u.id)?'selected':''}" data-action="chat-room" data-room="${u.id}"><span class="chat-room-avatar">${avatarHTML(u)}</span><span class="chat-room-meta"><span class="chat-room-name"><b>${esc(u.name)}</b>${unreadBadge(String(u.id))}</span><small>${u.role==='admin'?'Администратор':'Сотрудник'}${S.presencePeople.some(p=>p.id===u.id)?' · в сети':''}</small></span></button>`).join('');
 }
 function chatMessagesHTML(){
  const messages=S.chatData?.messages||[];
- return messages.length?(S.chatData?.hasMore?'<button type="button" class="chat-load-older" data-action="chat-older">Показать более ранние сообщения</button>':'')+messages.map(m=>`<div class="chat-bubble ${m.sender_id===S.user.id?'own':''}"><b>${esc(m.sender_id===S.user.id?'Вы':m.sender_name)}</b><p>${esc(m.body)}</p><small>${esc(dayTime(m.created_at))}</small></div>`).join('')
+ return messages.length?(S.chatData?.hasMore?'<button type="button" class="chat-load-older" data-action="chat-older">Показать более ранние сообщения</button>':'')+messages.map(m=>{const paint=chatPaint(m.style);return `<div class="chat-message-line ${m.sender_id===S.user.id?'own':''}"><span class="chat-room-avatar chat-message-avatar">${avatarHTML(m.sender_id===S.user.id?S.user:{id:m.sender_id,name:m.sender_name,avatar_revision:m.avatar_revision,avatar_url:m.avatar_url,avatar_stored:m.avatar_stored})}</span><div class="chat-bubble ${m.sender_id===S.user.id?'own':''} ${paint.classes}" style="${paint.style}"><b>${esc(m.sender_id===S.user.id?'Вы':m.sender_name)}</b><p>${esc(m.body)}</p><small>${esc(dayTime(m.created_at))}</small>${chatDecor(m.style)}</div></div>`}).join('')
    :`<div class="chat-empty">${ic('message')}<b>Пока нет сообщений</b><span>Напишите первым — сообщение увидят участники этой беседы.</span></div>`;
 }
 function chatPage(){
  const person=S.chatData?.users.find(u=>String(u.id)===S.chatRoom);
  const title=S.chatRoom==='general'?'Общий чат':person?.name||'Личная переписка';
+ const paint=chatPaint(S.chatData?.theme,true);
  return `${head('ОБЩЕНИЕ','Чат','Личные переписки и общий чат команды. Сообщения сохраняются в базе.')}
-  <div class="chat-layout card"><aside class="chat-rooms" aria-label="Беседы"><h2>Беседы</h2><div id="chat-rooms-list">${chatRoomsHTML()}</div></aside>
-  <section class="chat-panel" aria-label="${esc(title)}"><div class="chat-panel-head"><span class="chat-room-avatar ${S.chatRoom==='general'?'group':''}">${S.chatRoom==='general'?ic('users'):esc(initials(title))}</span><div><b>${esc(title)}</b><small>${S.chatRoom==='general'?'Сообщения видны всей команде':'Сообщения видны только вам двоим'}</small></div></div>
+  <div class="chat-layout card ${paint.classes}" style="${paint.style}"><div class="chat-frame-decor" id="chat-frame-decor" aria-hidden="true">${chatDecor(S.chatData?.theme,true)}</div><aside class="chat-rooms" aria-label="Беседы"><h2>Беседы</h2><div id="chat-rooms-list">${chatRoomsHTML()}</div></aside>
+  <section class="chat-panel" aria-label="${esc(title)}"><div class="chat-panel-head"><span class="chat-room-avatar ${S.chatRoom==='general'?'group':''}">${S.chatRoom==='general'?ic('users'):avatarHTML(person||{name:title})}</span><div class="chat-panel-head-label"><b>${esc(title)}</b><small>${S.chatRoom==='general'?'Сообщения видны всей команде':'Сообщения видны только вам двоим'}</small></div><button type="button" class="btn secondary chat-design-trigger" data-action="chat-design-room" title="Изменить рамку беседы для всех">✧ Рамка чата</button></div>
   <div class="chat-messages" id="chat-messages" role="log" aria-label="Сообщения" aria-live="polite">${chatMessagesHTML()}</div>
-  <form id="chat-form" class="chat-composer"><label class="sr-only" for="chat-text">Ваше сообщение</label><textarea id="chat-text" name="message" maxlength="2000" rows="2" placeholder="Напишите сообщение…" required></textarea><button class="btn primary" type="submit">${ic('arrow')} Отправить</button></form></section></div>`;
+  ${S.chatDesignOpen?`<div class="chat-style-editor" id="chat-style-editor">${chatEditorHTML(S.chatDesignOpen)}</div>`:''}
+  <form id="chat-form" class="chat-composer"><label class="sr-only" for="chat-text">Ваше сообщение</label><textarea id="chat-text" name="message" maxlength="2000" rows="2" placeholder="Напишите сообщение…" required></textarea><button class="btn secondary chat-design-trigger" type="button" data-action="chat-design-message">✦ Оформление</button><button class="btn primary" type="submit">${ic('arrow')} Отправить</button></form></section></div>`;
 }
 function updateChatView(){
  const messages=$('#chat-messages'),rooms=$('#chat-rooms-list');
  if(!messages||!rooms)return;
  const shouldScroll=messages.scrollHeight-messages.scrollTop-messages.clientHeight<110;
  messages.innerHTML=chatMessagesHTML();rooms.innerHTML=chatRoomsHTML();
+ hydrateAvatars();updateUnreadUI();applyRoomTheme();
  if(shouldScroll)messages.scrollTop=messages.scrollHeight;
 }
 async function fetchChat(initial=false){
@@ -198,13 +302,36 @@ async function fetchChat(initial=false){
   if(S.chatRoom!==room||S.page!=='chat')return false;
   const messages=after!=null?[...old.messages,...result.messages.filter(x=>x.id>old.lastId)]:result.messages;
   S.chatData={room,messages,users:result.users,lastId:messages.at(-1)?.id||0,
-              hasMore:after!=null?old.hasMore:result.has_more};
+              theme:normalizedStyle(result.theme),hasMore:after!=null?old.hasMore:result.has_more};
+  if(!document.hidden)await markChatRead(room);
   return true;
  }finally{chatBusy=false}
 }
 async function pollChat(){
  if(S.page!=='chat'||!S.user||document.hidden||chatBusy)return;
  try{if(await fetchChat())updateChatView()}catch(e){console.warn('Сообщения временно недоступны',e.message)}
+}
+async function markChatRead(room){
+ if(!S.chatData?.lastId||!S.user)return;
+ await api('/api/chat/read','POST',{room,up_to:S.chatData.lastId});
+ if(S.chatRoom!==room||S.page!=='chat')return;
+ if(room==='general')S.unread.general=0;
+ else delete S.unread.direct[room];
+ updateUnreadUI();
+}
+async function pollChatStatus(){
+ if(!S.user||document.hidden||chatStatusBusy)return;
+ chatStatusBusy=true;
+ try{
+  const query=chatStatusCursor===null?'':'?after='+chatStatusCursor;
+  const status=await api('/api/chat/status'+query);
+  if(!S.user)return;
+  chatStatusCursor=status.cursor;
+  S.unread={direct:status.direct||{},general:Number(status.general)||0};
+  updateUnreadUI();
+  // The first status request shows counts but never replays old messages as popups.
+  for(const message of status.notices)notify('Вам пришло новое сообщение от „'+message.sender_name+'“');
+ }finally{chatStatusBusy=false}
 }
 function stopChatPolling(){if(chatTimer)clearInterval(chatTimer);chatTimer=null;S.chatData=null}
 function startChatPolling(){if(chatTimer)return;chatTimer=setInterval(pollChat,3500)}
@@ -242,7 +369,7 @@ function attendancePage(){
  <div class="hint section-spacer">${ic('info')} По умолчанию часы являются плановыми, а не подтверждением фактического выхода. ${isAdmin()?'Для работы в выходной отметьте сотруднику «На работе» и при необходимости задайте часы.':'Изменить табель может только администратор.'} Праздники автоматически не исключаются.</div>`
 }
 
-const backupNames={users:'Учётные записи',tasks:'Виды работ',entries:'Записи работ',cell_comments:'Комментарии',attendance:'Отметки табеля',daily_hours:'Общие часы',personal_hours:'Личные часы',activity:'События журнала'};
+const backupNames={users:'Учётные записи',tasks:'Виды работ',entries:'Записи работ',cell_comments:'Комментарии',attendance:'Отметки табеля',daily_hours:'Общие часы',personal_hours:'Личные часы',activity:'События журнала',chat_messages:'Сообщения чата',chat_reads:'Отметки прочтения',chat_themes:'Оформление бесед'};
 function backupDate(iso){return iso?new Date(iso.replace(' ','T').replace(/(\d{2}:\d{2}:\d{2})$/,'$1Z')).toLocaleString('ru-RU',{timeZone:'Europe/Minsk'}):'—'}
 function backupPage(){
  const status=S.backupStatus,now=status?.current,view=S.backupPreview;
@@ -251,7 +378,7 @@ function backupPage(){
  <div class="backup-grid"><section class="card card-pad"><div class="card-head"><div><h3>Текущая база</h3><p>Скачайте копию на свой компьютер и храните её отдельно от сайта.</p></div></div>
  ${now?latest(now):'<p>Загрузка данных…</p>'}<div class="backup-key-counts"><b>${now?.counts?.entries??'—'}</b> записей работ · <b>${now?.counts?.tasks??'—'}</b> видов работ · <b>${now?.counts?.users??'—'}</b> учётных записей</div>
  <button type="button" class="btn primary" data-action="backup-download">${ic('download')} Скачать резервную копию ZIP</button>
- <p class="backup-subnote">Архив содержит данные и хеши паролей, но не содержит действующих сеансов. Храните файл в безопасном месте.</p></section>
+ <p class="backup-subnote">Архив содержит сообщения и хеши паролей, но не содержит аватаров и действующих сеансов. После восстановления аватары понадобится загрузить заново. Храните файл в безопасном месте.</p></section>
  <section class="card card-pad"><div class="card-head"><div><h3>Загрузить старую копию</h3><p>Перед восстановлением сначала просмотрите различия.</p></div></div>
  <label class="backup-file-label" for="backup-file">${ic('download')} ${esc(S.backupFile?.name||'Выбрать ZIP-архив Forma')}</label><input type="file" id="backup-file" accept=".zip,application/zip"><div class="backup-buttons"><button type="button" class="btn secondary" data-action="backup-inspect" ${S.backupFile?'':'disabled'}>Сравнить с текущей базой</button></div>
  <p class="backup-subnote">Максимум 25 МБ. Данные не изменятся, пока вы не подтвердите восстановление.</p></section></div>
@@ -280,9 +407,27 @@ function prankPage(){
 function teamPage(){let people=S.data.users;return `${head('КОМАНДА','Сотрудники','Создавайте аккаунты, управляйте доступом и следите за результатами.',`<button class="btn primary" data-modal="user">${ic('plus')} Добавить сотрудника</button>`)}<div class="team-grid">${people.map(u=>{let ent=S.data.entries.filter(e=>e.user_id===u.id),hours=ent.reduce((a,e)=>a+Number(e.quantity)*Number(S.data.tasks.find(t=>t.id===e.task_id)?.norm||0),0);return `<div class="team-card ${u.active?'':'inactive'}"><div class="team-card-top"><div class="avatar">${esc(initials(u.name))}</div><span class="badge ${u.active?'green':'gray'}">${u.active?'● Активен':'● Отключён'}</span></div><h3>${esc(u.name)}</h3><p>@${esc(u.username)}${u.role==='admin'?' · Администратор':''}</p><div class="team-card-footer"><span>${ent.length} записей · ${fmt(hours)} ч</span><div><button class="table-icon-btn" title="Изменить сотрудника и права" data-modal="edit-user" data-id="${u.id}">${ic('edit')}</button><button class="table-icon-btn ${u.active?'danger':''}" title="${u.active?'Отключить':'Включить'}" data-action="toggle-user" data-id="${u.id}">${ic(u.active?'lock':'check')}</button></div></div></div>`}).join('')}</div><div class="settings-area"><div class="stat-icon mint">${ic('lock')}</div><div><b style="font-size:11px">Доступ к данным</b><p>Сотрудник меняет только данные в «Мои работы»; табель доступен ему для просмотра. Администратор управляет командой и видит общий отчёт.</p></div></div>`}
 function catalogPage(){let tasks=S.data.tasks.filter(t=>!S.search||t.title.toLowerCase().includes(S.search.toLowerCase())||t.category.toLowerCase().includes(S.search.toLowerCase()));return `${head('СПРАВОЧНИК','Каталог работ','Один общий список для всей команды. Добавленные работы сразу доступны сотрудникам.',`<button class="btn primary" data-modal="task">${ic('plus')} Новая работа</button>`)}<div class="card"><div class="filter-bar"><div class="search-input">${ic('search')}<input data-filter="search" value="${esc(S.search)}" placeholder="Найти вид работы…"></div><span class="count-chip">${S.data.tasks.filter(t=>t.active).length} активных работ</span></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Выполняемая работа</th><th>Направление</th><th>Ед. изм.</th><th>Норма, ч</th><th>Статус</th><th class="right">Действия</th></tr></thead><tbody>${tasks.map(t=>`<tr><td><div class="truncate strong" title="${esc(t.title)}">${esc(t.title)}</div></td><td><span class="badge blue">${esc(t.category)}</span></td><td class="muted">${esc(t.unit)}</td><td class="num">${fmt(t.norm,3)}</td><td><span class="badge ${t.active?'green':'gray'}">${t.active?'Активна':'Архив'}</span></td><td class="right"><button class="table-icon-btn" title="Редактировать" data-modal="edit-task" data-id="${t.id}">${ic('edit')}</button><button class="table-icon-btn ${t.active?'danger':''}" title="${t.active?'Архивировать':'Восстановить'}" data-action="toggle-task" data-id="${t.id}">${ic(t.active?'trash':'check')}</button></td></tr>`).join('')}</tbody></table></div><div class="table-footer">${tasks.length} работ · Архивирование сохраняет историю выполненных работ в отчётах</div></div>`}
 function activityPage(){return `${head('ИСТОРИЯ / АУДИТ','Журнал действий','Изменения и события в системе сохраняются автоматически.',`<button class="btn secondary" data-action="refresh">${ic('history')} Обновить</button>`)}<div class="card card-pad"><div class="card-head"><div><h3>Последние события</h3><p>До 150 последних действий</p></div><span class="badge green">${S.logs?.logs?.length||0} событий</span></div>${S.logs?.logs?.length?S.logs.logs.map(a=>`<div class="activity-item"><div class="activity-icon ${a.action.includes('user')?'blue':''}">${ic(a.action==='attendance'?'calendar':a.action==='comment'?'message':a.action.includes('user')?'users':a.action.includes('task')?'layers':'check')}</div><div style="min-width:0;flex:1"><b>${esc(a.actor)} · ${esc(({login:'Вход в систему',logout:'Выход',entry:'Отметка работы',delete_entry:'Удаление записи',attendance:'Изменение табеля',user_added:'Новый сотрудник',user_updated:'Изменение сотрудника',task_added:'Новая работа',task_updated:'Изменение работы',password:'Смена пароля',import:'Импорт данных',comment:'Комментарий к ячейке'})[a.action]||a.action)}</b><p style="white-space:normal;max-width:unset">${esc(a.detail)}</p></div><small class="log-date">${esc(dayTime(a.created_at))}</small></div>`).join(''):emptyState('Событий пока нет','Журнал появится после первых действий')}</div>`}
+async function compressedAvatar(file){
+ if(!['image/png','image/jpeg','image/webp','image/gif'].includes(file.type)||file.size>12*1024*1024)throw Error('Выберите PNG, JPEG, WebP или GIF до 12 МБ');
+ const bitmap=await createImageBitmap(file);
+ try{
+  const size=Math.min(bitmap.width,bitmap.height),x=(bitmap.width-size)/2,y=(bitmap.height-size)/2;
+  const canvas=document.createElement('canvas');canvas.width=canvas.height=160;
+  canvas.getContext('2d').drawImage(bitmap,x,y,size,size,0,0,160,160);
+  const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/webp',.76));
+  if(!blob||blob.size>90000)throw Error('Не получилось сжать изображение до 90 КБ');
+  return await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(Error('Не удалось открыть изображение'));reader.readAsDataURL(blob)});
+ }finally{bitmap.close?.()}
+}
 function modalFrame(title,desc,content,submit='Сохранить'){return `<div class="modal-backdrop" data-action="close-modal"><div class="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="modal-head"><div><h2>${esc(title)}</h2><p>${esc(desc)}</p></div><button class="close-btn" type="button" data-action="close-modal">${ic('x')}</button></div><form id="modal-form" class="modal-body"><div class="form-grid">${content}<div class="form-error" id="form-error"></div><div class="form-actions"><button class="btn secondary" type="button" data-action="close-modal">Отмена</button><button class="btn primary" type="submit">${submit}</button></div></div></form></div></div>`}
 function field(name,label,type='text',value='',extra=''){return `<div class="field"><label for="field-${name}">${label}</label><input id="field-${name}" name="${name}" type="${type}" value="${esc(value)}" ${extra}></div>`}
-function renderModal(){let root=$('#modal-root');if(!root)return;let m=S.modal;if(!m){root.innerHTML='';return}let html='';if(m.type==='entry'){
+function renderModal(){let root=$('#modal-root');if(!root)return;let m=S.modal;if(!m){root.innerHTML='';return}let html='';if(m.type==='avatar'){
+ html=modalFrame('Мой аватар','Выберите изображение с устройства или вставьте прямую HTTPS-ссылку.',
+ `<div class="avatar-preview avatar">${avatarHTML(S.user)}</div><div class="field"><label for="avatar-file">Загрузить файл</label><input id="avatar-file" name="file" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><small>Фото обрежется до квадрата и сожмётся. PNG, JPEG, WebP или GIF до 12 МБ.</small></div>
+ <div class="field"><label for="avatar-url">Или HTTPS-ссылка на изображение</label><input id="avatar-url" name="url" type="url" placeholder="https://example.com/avatar.jpg" value="${esc(S.user.avatar_url||'')}"><small>Изображение по ссылке хранится на стороннем сайте; Forma удалит только свою ссылку на него.</small></div>
+ <div class="hint">${ic('info')} При замене старый аватар исчезает из действующей базы. Аватары не включаются в ZIP-копии: после восстановления потребуется поставить их снова.</div>
+ <button type="button" class="btn secondary" data-action="avatar-remove">Удалить мой аватар</button>`, 'Сохранить аватар');
+ }else if(m.type==='entry'){
  let existing=S.data.entries.find(e=>e.id===Number(m.id));let date=existing?.work_date||(S.month===S.today.slice(0,7)?S.today:S.month+'-01');let user=existing?.user_id||Number(m.user)||S.user.id;
  let tasks=S.data.tasks.filter(t=>t.active||existing?.task_id===t.id);
  html=modalFrame(existing?'Редактировать запись':'Отметить выполненную работу','Укажите работу, количество и дату выполнения.',`${isAdmin()?`<div class="field"><label>Сотрудник</label><select name="user_id" required>${activeUsers().map(u=>`<option value="${u.id}" ${u.id===user?'selected':''}>${esc(u.name)}</option>`).join('')}</select></div>`:''}<div class="field"><label>Вид работы</label><select name="task_id" required>${tasks.filter(t=>t.active||t.id===existing?.task_id).map(t=>`<option value="${t.id}" ${t.id===existing?.task_id?'selected':''}>${esc(t.title)} · ${esc(t.unit)}</option>`).join('')}</select></div><div class="form-two">${field('date','Дата выполнения','date',date,`max="${S.today}" required`)}${field('quantity','Количество','number',existing?.quantity||'',`min="0.001" max="10000000" step="any" placeholder="Например, 5" required`)}</div><div class="field"><label>Комментарий <span class="muted-small">· необязательно</span></label><textarea name="note" placeholder="Краткое примечание к работе…" maxlength="500">${esc(existing?.note||'')}</textarea><small>Если такая работа уже отмечена за этот день, запись будет обновлена.</small></div>`,existing?'Сохранить изменения':'Добавить запись');
@@ -321,10 +466,16 @@ function renderModal(){let root=$('#modal-root');if(!root)return;let m=S.modal;i
  const t=S.data.tasks.find(t=>t.id===Number(m.id)),editing=!!t;html=modalFrame(editing?'Изменить работу':'Новая работа',editing?'Обновите параметры вида работы.':'Появится в каталоге у всех сотрудников.',`<div class="field"><label>Название работы</label><textarea name="title" minlength="4" maxlength="300" placeholder="Что выполняет сотрудник?" required>${esc(t?.title||'')}</textarea></div><div class="form-two">${field('unit','Единица измерения','text',t?.unit||'шт.','maxlength="30" required')}${field('norm','Норма, ч / ед.','number',t?.norm??0,'min="0" max="10000" step="any" required')}</div><div class="field"><label>Направление</label><select name="category">${['7ЭГ и документация','МПК Панорама','ПК УРГ','Другое',...(t&&!['7ЭГ и документация','МПК Панорама','ПК УРГ','Другое'].includes(t.category)?[t.category]:[])].map(c=>`<option ${t?.category===c?'selected':''}>${esc(c)}</option>`).join('')}</select></div><div class="hint">${ic('info')} Нормативное время в отчёте = количество × норма.</div>`,editing?'Сохранить':'Добавить работу');
  }else if(m.type==='password'){
  html=modalFrame('Сменить пароль','Новый пароль будет нужен при следующем входе.',`${field('old','Текущий пароль','password','','required autocomplete="current-password"')}${field('new','Новый пароль','password','','minlength="8" required autocomplete="new-password"')}`,'Сменить пароль');
- }root.innerHTML=html;root.querySelector('input,select,textarea')?.focus()}
-async function navigate(page){const wasMenuOpen=S.menuOpen;if(wasMenuOpen)setMenuOpen(false);if(page!=='chat')stopChatPolling();S.modal=null;S.page=page;S.search='';S.userFilter='';S.categoryFilter='';if(page==='report'&&isAdmin())S.report=await api('/api/report?month='+S.month);if(page==='activity'&&isAdmin())S.logs=await api('/api/logs');if(page==='backup'&&isAdmin())S.backupStatus=await api('/api/backup/status');if(page==='prank'&&isAdmin())S.prankOnline=(await api('/api/prank/online')).user_ids;if(page==='chat')await fetchChat(true);render();if(page==='chat'){startChatPolling();const box=$('#chat-messages');if(box)box.scrollTop=box.scrollHeight}if(wasMenuOpen)$('#menu-toggle')?.focus({preventScroll:true});window.scrollTo({top:0,behavior:'smooth'})}
+ }root.innerHTML=html;if(m.type==='avatar')hydrateAvatars();root.querySelector('input,select,textarea')?.focus()}
+async function navigate(page){const wasMenuOpen=S.menuOpen;if(wasMenuOpen)setMenuOpen(false);if(page!=='chat'){stopChatPolling();S.chatDesignOpen=null;S.roomDraft=null}S.modal=null;S.page=page;S.search='';S.userFilter='';S.categoryFilter='';if(page==='report'&&isAdmin())S.report=await api('/api/report?month='+S.month);if(page==='activity'&&isAdmin())S.logs=await api('/api/logs');if(page==='backup'&&isAdmin())S.backupStatus=await api('/api/backup/status');if(page==='prank'&&isAdmin())S.prankOnline=(await api('/api/prank/online')).user_ids;if(page==='chat')await fetchChat(true);render();if(page==='chat'){startChatPolling();const box=$('#chat-messages');if(box)box.scrollTop=box.scrollHeight}if(wasMenuOpen)$('#menu-toggle')?.focus({preventScroll:true});window.scrollTo({top:0,behavior:'smooth'})}
 function closeModal(){S.modal=null;$('#modal-root')?.replaceChildren()}
-async function saveModal(form){const m=S.modal,fd=new FormData(form),data=Object.fromEntries(fd.entries());const sheetX=$('.work-sheet-scroll')?.scrollLeft||0;try{form.querySelector('button[type=submit]').disabled=true;if(m.type==='entry'){
+async function saveModal(form){const m=S.modal,fd=new FormData(form),data=Object.fromEntries(fd.entries());const sheetX=$('.work-sheet-scroll')?.scrollLeft||0;try{form.querySelector('button[type=submit]').disabled=true;if(m.type==='avatar'){
+   const file=data.file,url=String(data.url||'').trim();
+   if(file?.size&&url&&url!==S.user.avatar_url)throw Error('Выберите только один способ: файл или ссылку');
+   if(!file?.size&&!url)throw Error('Выберите файл или укажите HTTPS-ссылку');
+   const payload=file?.size?{image_b64:await compressedAvatar(file)}:{url};
+   await api('/api/avatar','POST',payload);clearAvatarCache();notify('Аватар сохранён');
+ }else if(m.type==='entry'){
   const payload={...data,task_id:Number(data.task_id),user_id:Number(data.user_id||S.user.id),quantity:Number(data.quantity)};
   if(m.id)await api('/api/entries/'+m.id,'PATCH',payload);else await api('/api/entries','POST',payload);
   notify('Запись о работе сохранена');
@@ -414,7 +565,7 @@ async function pollPranks(){
    S.prankOnline=(await api('/api/prank/online')).user_ids;
    updatePrankPresence();
   }
- }catch(e){setPresenceOffline();console.warn('Связь временно недоступна',e.message)}finally{prankBusy=false}
+ }catch(e){setPresenceOffline();console.warn('Связь временно недоступна',e.message)}finally{prankBusy=false;try{await pollChatStatus()}catch(e){console.warn('Счётчики чата временно недоступны',e.message)}}
 }
 function updatePrankPresence(){
  const online=S.prankOnline.includes(Number(S.prankTarget)),badge=$('#prank-presence');
@@ -549,9 +700,20 @@ function saveBackupBlob(response,name){
   document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),20000);
  });
 }
-document.addEventListener('submit',async e=>{if(e.target.id==='login-form'){e.preventDefault();const form=e.target,btn=form.querySelector('button');btn.disabled=true;$('#login-error').textContent='';try{const d=Object.fromEntries(new FormData(form).entries());const res=await api('/api/login','POST',d);setToken(res.session_token);S.user=res.user;S.page='overview';await load();startPrankPolling()}catch(err){$('#login-error').textContent=err.message}finally{btn.disabled=false}}else if(e.target.id==='modal-form'){e.preventDefault();await saveModal(e.target)}else if(e.target.id==='chat-form'){e.preventDefault();const form=e.target,input=form.querySelector('textarea'),body=input.value.trim(),button=form.querySelector('button');if(!body)return;button.disabled=true;try{await api('/api/chat','POST',{recipient_id:S.chatRoom==='general'?null:Number(S.chatRoom),body});input.value='';await fetchChat();updateChatView();const box=$('#chat-messages');if(box)box.scrollTop=box.scrollHeight;input.focus()}catch(err){notify(err.message,true)}finally{button.disabled=false}}});
+document.addEventListener('submit',async e=>{if(e.target.id==='login-form'){e.preventDefault();const form=e.target,btn=form.querySelector('button');btn.disabled=true;$('#login-error').textContent='';try{const d=Object.fromEntries(new FormData(form).entries());const res=await api('/api/login','POST',d);setToken(res.session_token);S.user=res.user;S.page='overview';await load();startPrankPolling()}catch(err){$('#login-error').textContent=err.message}finally{btn.disabled=false}}else if(e.target.id==='modal-form'){e.preventDefault();await saveModal(e.target)}else if(e.target.id==='chat-form'){e.preventDefault();const form=e.target,input=form.querySelector('textarea'),body=input.value.trim(),button=form.querySelector('button[type=submit]');if(!body)return;button.disabled=true;try{await api('/api/chat','POST',{recipient_id:S.chatRoom==='general'?null:Number(S.chatRoom),body,style:normalizedStyle(S.messageStyle)});input.value='';await fetchChat();updateChatView();const box=$('#chat-messages');if(box)box.scrollTop=box.scrollHeight;input.focus()}catch(err){notify(err.message,true)}finally{button.disabled=false}}});
 document.addEventListener('click',async e=>{if(S.presenceOpen&&!e.target.closest('.presence-widget')){S.presenceOpen=false;updatePresenceWidget()}const nav=e.target.closest('[data-nav]');if(nav){try{await navigate(nav.dataset.nav)}catch(err){notify(err.message,true)}return}const btn=e.target.closest('[data-action],[data-modal],[data-status]');if(!btn)return;if(btn.dataset.modal){S.modal={type:btn.dataset.modal,id:btn.dataset.id,user:btn.dataset.user,task:btn.dataset.task,day:btn.dataset.day};renderModal();return}if(btn.dataset.status){S.attendanceChoice=btn.dataset.status;document.querySelectorAll('.status-choice').forEach(b=>b.classList.toggle('selected',b===btn));$('#reason-wrap').style.display=S.attendanceChoice==='absent'?'block':'none';const reason=$('#reason-wrap input');reason.required=S.attendanceChoice==='absent';return}
- if(btn.dataset.action==='chat-room'){if(S.chatRoom===btn.dataset.room)return;S.chatRoom=btn.dataset.room;S.chatData=null;try{await fetchChat(true);render();const box=$('#chat-messages');if(box)box.scrollTop=box.scrollHeight}catch(err){notify(err.message,true)}return}
+ if(btn.dataset.action==='avatar-remove'){if(!confirm('Удалить текущий аватар?'))return;try{await api('/api/avatar','POST',{remove:true});clearAvatarCache();closeModal();await load();notify('Аватар удалён')}catch(err){notify(err.message,true)}return}
+ if(btn.dataset.action==='chat-design-message'){toggleChatEditor('message');return}
+ if(btn.dataset.action==='chat-design-room'){toggleChatEditor('room');return}
+ if(btn.dataset.action==='chat-style-reset'){if(S.chatDesignOpen==='room')S.roomDraft={};else S.messageStyle={};refreshChatEditor();return}
+ if(btn.dataset.action==='chat-style-save-room'){
+  const room=S.chatRoom;btn.disabled=true;
+  try{const result=await api('/api/chat/theme','POST',{room,style:normalizedStyle(S.roomDraft)});
+   if(S.chatRoom===room&&S.chatData){S.chatData.theme=result.theme;applyRoomTheme();S.chatDesignOpen=null;S.roomDraft=null;$('#chat-style-editor')?.remove()}
+   notify('Оформление беседы обновлено для всех участников');
+  }catch(err){notify(err.message,true);btn.disabled=false}return
+ }
+ if(btn.dataset.action==='chat-room'){if(S.chatRoom===btn.dataset.room)return;S.chatRoom=btn.dataset.room;S.chatData=null;S.chatDesignOpen=null;S.roomDraft=null;try{await fetchChat(true);render();const box=$('#chat-messages');if(box)box.scrollTop=box.scrollHeight}catch(err){notify(err.message,true)}return}
  if(btn.dataset.action==='chat-older'){const data=S.chatData,oldest=data?.messages[0]?.id;if(!data?.hasMore||!oldest)return;const box=$('#chat-messages'),height=box.scrollHeight,top=box.scrollTop;btn.disabled=true;try{const result=await api('/api/chat?room='+encodeURIComponent(data.room)+'&before='+oldest);if(S.chatRoom!==data.room||!S.chatData)return;S.chatData.messages=[...result.messages,...S.chatData.messages];S.chatData.hasMore=result.has_more;updateChatView();box.scrollTop=box.scrollHeight-height+top}catch(err){notify(err.message,true);btn.disabled=false}return}
  if(btn.dataset.action==='presence-toggle'){if(!S.presenceOnline)return;S.presenceOpen=!S.presenceOpen;updatePresenceWidget();if(S.presenceOpen)try{await refreshPresence()}catch{setPresenceOffline()}return}
  if(btn.dataset.action==='prank-close'){clearPrankEffect();return}
@@ -610,6 +772,13 @@ document.addEventListener('click',async e=>{if(S.presenceOpen&&!e.target.closest
  }}catch(err){notify(err.message,true)}});
 document.addEventListener('input',e=>{if(e.target.id==='backup-confirm'){$('[data-action="backup-restore"]').disabled=e.target.value.trim()!=='ВОССТАНОВИТЬ';return}if(!e.target.dataset.filter)return;let type=e.target.dataset.filter,value=e.target.value;if(type==='search')S.search=value;if(type==='user')S.userFilter=value;let pos=e.target.selectionStart;let name=e.target.dataset.filter;let prev=document.activeElement;render();let next=document.querySelector(`[data-filter="${name}"]`);if(next){next.focus();if(name==='search')next.setSelectionRange(pos,pos)}});
 document.addEventListener('change',e=>{
+ if(e.target.dataset.styleField&&S.chatDesignOpen){
+  const key=e.target.dataset.styleField,value=key==='glow'?e.target.checked:
+   Object.hasOwn(CHAT_STYLE_CATEGORIES,key)?Number(e.target.value):e.target.value;
+  if(S.chatDesignOpen==='room')S.roomDraft={...normalizedStyle(S.roomDraft),[key]:value};
+  else S.messageStyle={...normalizedStyle(S.messageStyle),[key]:value};
+  refreshChatEditor();return
+ }
  if(e.target.id==='backup-file'){S.backupFile=e.target.files?.[0]||null;S.backupPreview=null;render();return}
  if(e.target.id==='prank-user'){S.prankTarget=Number(e.target.value);updatePrankPresence();return}
  if(e.target.dataset.cell){saveGridCell(e.target);return}

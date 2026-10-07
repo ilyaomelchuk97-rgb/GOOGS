@@ -35,9 +35,20 @@ CREATE TABLE IF NOT EXISTS users (
         CREATE TABLE IF NOT EXISTS chat_messages (
           id INTEGER PRIMARY KEY, sender_id INTEGER NOT NULL REFERENCES users(id),
           recipient_id INTEGER REFERENCES users(id), body TEXT NOT NULL,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          style_json TEXT NOT NULL DEFAULT '{}');
         CREATE INDEX IF NOT EXISTS idx_chat_recipient ON chat_messages(recipient_id,id);
         CREATE INDEX IF NOT EXISTS idx_chat_sender ON chat_messages(sender_id,id);
+        CREATE TABLE IF NOT EXISTS chat_reads (
+          user_id INTEGER NOT NULL REFERENCES users(id), room_key TEXT NOT NULL,
+          last_read_id INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id,room_key));
+        CREATE TABLE IF NOT EXISTS chat_themes (
+          room_key TEXT PRIMARY KEY, theme_json TEXT NOT NULL,
+          updated_by INTEGER NOT NULL REFERENCES users(id),
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS user_avatars (
+          user_id INTEGER PRIMARY KEY REFERENCES users(id), image_b64 TEXT NOT NULL DEFAULT '',
+          mime TEXT NOT NULL DEFAULT '', image_url TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS sessions (
           token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
           expires_at TEXT NOT NULL);

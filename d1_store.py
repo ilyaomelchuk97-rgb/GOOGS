@@ -112,7 +112,8 @@ class D1Connection:
 # Parents first for inserts, children first for deletes. Volatile login/presence tables
 # are intentionally not copied; users log in again after migration or restore.
 TABLES=('users','tasks','entries','cell_comments','attendance','daily_hours',
-        'personal_hours','activity','chat_messages','sessions','prank_presence','prank_events')
+        'personal_hours','activity','chat_messages','chat_reads','chat_themes','user_avatars',
+        'sessions','prank_presence','prank_events')
 
 def sqlite_snapshot(remote):
     """Download a consistent-enough SQLite snapshot for an admin backup.
@@ -127,7 +128,7 @@ def sqlite_snapshot(remote):
     try:
         snap.executescript(schema)
         for table in TABLES:
-            if table in ('sessions','prank_presence','prank_events'): continue
+            if table in ('sessions','prank_presence','prank_events','user_avatars'): continue
             columns=[row[1] for row in snap.execute('PRAGMA table_info("'+table+'")')]
             insert='INSERT INTO "'+table+'" ('+','.join('"'+c+'"' for c in columns)+') VALUES ('+','.join('?' for _ in columns)+')'
             offset=0
@@ -152,7 +153,7 @@ def replace_atomic(remote, source):
     validate(source)
     statements=[{'sql':'DELETE FROM "'+t+'"','params':[]} for t in reversed(TABLES)]
     for table in TABLES:
-        if table in ('sessions','prank_presence','prank_events'):continue
+        if table in ('sessions','prank_presence','prank_events','user_avatars'):continue
         cols=[r[1] for r in source.execute('PRAGMA table_info("'+table+'")')]
         rows=[list(row) for row in source.execute('SELECT '+','.join('"'+c+'"' for c in cols)+' FROM "'+table+'" ORDER BY rowid')]
         if not rows:continue

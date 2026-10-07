@@ -301,3 +301,143 @@ body.menu-open{overflow:hidden}
 @media(max-width:700px){.chat-layout{grid-template-columns:1fr;height:calc(100dvh - 220px);min-height:500px}.chat-rooms{border-right:0;border-bottom:1px solid #e1ebec;overflow-x:auto;overflow-y:hidden;padding:9px 10px}.chat-rooms h2{display:none}#chat-rooms-list{display:flex;gap:5px}.chat-room{width:auto;max-width:190px;flex:none;padding:8px}.chat-room small{display:none}.chat-room-avatar{width:32px;height:32px}.chat-panel-head{min-height:54px;padding:8px 12px}.chat-messages{padding:12px}.chat-bubble{max-width:86%}.chat-composer{padding:10px;gap:7px}.chat-composer .btn{padding:8px 11px;font-size:13px}}
 .chat-load-older{align-self:center;border:1px solid #c7dfda;border-radius:20px;background:#fff;color:#187664;font:inherit;font-size:13px;font-weight:750;padding:7px 13px;cursor:pointer}
 .chat-load-older:hover,.chat-load-older:focus-visible{background:#e7f6ef;outline:2px solid #65c7ab}
+
+/* Непрочитанные и пользовательские аватары. */
+.avatar,.chat-room-avatar{position:relative;overflow:hidden}
+.avatar-initials{display:grid;place-items:center;width:100%;height:100%;line-height:1}
+.avatar-photo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit}
+.avatar-photo[hidden],.chat-unread[hidden]{display:none!important}
+.avatar-edit-trigger{border:0;cursor:pointer;padding:0;flex:none;font:inherit}
+.avatar-edit-trigger:hover,.avatar-edit-trigger:focus-visible{outline:3px solid #20aa8a;outline-offset:3px}
+.avatar-preview{width:86px;height:86px;font-size:25px;margin:0 auto 8px}
+.chat-room .chat-room-meta{min-width:0;flex:1;display:block}
+.chat-room-name{display:flex;align-items:center;gap:6px;min-width:0}
+.chat-room-name b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-unread{display:inline-flex;align-items:center;justify-content:center;flex:none;min-width:20px;height:20px;padding:0 5px;box-sizing:border-box;border-radius:12px;background:#e45863;color:#fff;font-size:11px;font-weight:900;line-height:1;font-variant-numeric:tabular-nums}
+.nav-link>.chat-unread{margin-left:auto}
+.chat-message-line{width:100%;display:flex;align-items:flex-end;gap:8px}
+.chat-message-line.own{flex-direction:row-reverse}
+.chat-message-avatar{width:32px;height:32px;border-radius:50%;font-size:11px;align-self:flex-end;flex:none}
+.chat-message-line>.chat-bubble{max-width:min(78%,680px);align-self:auto}
+@media(max-width:700px){.chat-message-line>.chat-bubble{max-width:80%}.chat-room-name b{max-width:125px}}
+
+
+/* Оформление переписок: 20 эффектов рамки, 20 цветочных и 20 лиственных
+   комбинаций из авторских AI-иллюстраций, 20 обрамлений официального знака. */
+.chat-layout{position:relative;isolation:isolate}
+.chat-layout>.chat-rooms,.chat-layout>.chat-panel{position:relative;z-index:1}
+.chat-frame-decor{position:absolute;inset:0;overflow:hidden;border-radius:inherit;z-index:3;pointer-events:none}
+.chat-panel-head-label{min-width:0;flex:1}
+.chat-panel-head-label b,.chat-panel-head-label small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-design-trigger{font-size:12px;min-height:32px;padding:0 9px;flex:none}
+.chat-style-editor{flex:none;max-height:min(52vh,460px);overflow:auto;padding:15px 17px;border-top:1px solid #d8eae5;background:linear-gradient(150deg,#f7fcf9,#fff)}
+.chat-style-title{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:10px;font-size:13px;color:#205b57}
+.chat-style-title span{color:#648589}
+.chat-style-controls{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
+.chat-style-controls label{display:grid;gap:5px;min-width:0;font-weight:700;font-size:12px;color:#3b6170}
+.chat-style-controls select,.chat-style-controls input[type=color]{width:100%;height:36px;background:white;border:1px solid #cbdedb;border-radius:9px;padding:3px;color:#284859;cursor:pointer}
+.chat-style-controls select{padding:4px;font-size:12px}
+.chat-style-controls .chat-glow-check{display:flex;align-items:center;gap:7px;align-self:end;min-height:36px}
+.chat-glow-check input{width:18px;height:18px;accent-color:#14a384}
+.chat-style-preview{position:relative;overflow:visible;margin:16px 8px 13px;padding:13px 47px 13px 16px;min-height:58px;max-width:420px;border:1px solid #cce3df;border-radius:14px;background:var(--bubble-bg,#e0f5e9);color:var(--bubble-ink,#203d4b);font-weight:700;font-size:13px}
+.chat-style-actions{display:flex;align-items:center;flex-wrap:wrap;gap:9px}.chat-style-actions small{color:#587b7c;font-size:12px}
+.chat-bubble.chat-painted{position:relative;background:var(--bubble-bg);border:2px solid var(--effect-color);color:var(--bubble-ink)}
+.chat-bubble.chat-painted b,.chat-bubble.chat-painted p,.chat-bubble.chat-painted small{color:var(--bubble-ink)}
+.chat-layout.chat-painted{border:2px solid var(--effect-color);background:var(--bubble-bg)}
+.chat-painted.glow-on{filter:drop-shadow(0 0 6px var(--glow-color)) drop-shadow(0 0 5px var(--glow-color))}
+.chat-ornament{position:absolute;display:block;pointer-events:none;z-index:2;--sz:35px;--spin:0deg;--hue:0deg;--flip:1;--opa:.9}
+.chat-ornament img{display:block;width:100%;height:100%;object-fit:contain;transform:rotate(var(--spin)) scaleX(var(--flip));filter:hue-rotate(var(--hue)) saturate(1.25);opacity:var(--opa)}
+.ornament-flower{top:-15px;right:-15px;width:var(--sz);height:var(--sz)}
+.ornament-branch{bottom:-18px;left:-17px;width:var(--sz);height:var(--sz)}
+.ornament-logo{bottom:-17px;right:-12px;width:calc(var(--sz) + 6px);height:calc(var(--sz) + 6px);padding:5px;border-radius:13px;background:linear-gradient(135deg,#167263,#163d60);border:1px solid #e3d29c;box-shadow:0 2px 7px #284d4b55}
+.ornament-logo img{filter:none;opacity:1}
+.chat-ornament.frame-ornament{width:calc(var(--sz) * 2.2);height:calc(var(--sz) * 2.2);opacity:.60}
+.ornament-flower.frame-ornament{top:-14px;right:-17px}.ornament-branch.frame-ornament{bottom:-14px;left:-17px}
+.ornament-logo.frame-ornament{width:calc(var(--sz) * 1.4);height:calc(var(--sz) * 1.4);bottom:auto;top:48%;right:2px;opacity:.43}
+.chat-message-line{padding:8px 16px}
+@keyframes chat-shimmer{0%,100%{background-position:0 50%}50%{background-position:100% 50%}}
+@keyframes chat-border-breathe{0%,100%{outline-offset:0;opacity:1}50%{outline-offset:4px;opacity:.8}}
+@keyframes chat-border-hue{to{filter:hue-rotate(360deg)}}
+@media(max-width:940px){.chat-style-controls{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){.chat-composer{flex-wrap:wrap}.chat-composer textarea{flex-basis:100%}.chat-panel-head{flex-wrap:wrap}.chat-panel-head-label{flex-basis:50%}.chat-style-editor{max-height:38vh}}
+
+.chat-painted.effect-1{border:2px solid var(--effect-color)}
+.chat-painted.effect-2{border:2px dashed var(--effect-color)}
+.chat-painted.effect-3{border:4px double var(--effect-color)}
+.chat-painted.effect-4{border:3px dotted var(--effect-color)}
+.chat-painted.effect-5{border:3px inset var(--effect-color)}
+.chat-painted.effect-6{border:3px ridge var(--effect-color)}
+.chat-painted.effect-7{border:3px groove var(--effect-color)}
+.chat-painted.effect-8{border:2px solid var(--effect-color);outline:2px dotted var(--effect-color);outline-offset:3px}
+.chat-painted.effect-9{border:3px solid transparent;background:linear-gradient(var(--bubble-bg),var(--bubble-bg)) padding-box,linear-gradient(120deg,var(--effect-color),#edd499,#81cfe2) border-box}
+.chat-painted.effect-10{border:3px solid transparent;background:linear-gradient(var(--bubble-bg),var(--bubble-bg)) padding-box,repeating-linear-gradient(45deg,var(--effect-color) 0 6px,#fff 6px 10px) border-box}
+.chat-painted.effect-11{border:3px solid transparent;background:linear-gradient(var(--bubble-bg),var(--bubble-bg)) padding-box,conic-gradient(var(--effect-color),#eeb8dc,#f7d98a,#a1e5cf,var(--effect-color)) border-box}
+.chat-painted.effect-12{border:2px solid var(--effect-color);outline:1px solid #dba6ce;outline-offset:2px}
+.chat-painted.effect-13{border:2px dotted var(--effect-color);box-shadow:inset 0 0 14px #beeedc,0 0 8px var(--effect-color)}
+.chat-painted.effect-14{border:3px dashed var(--effect-color);outline:1px dotted #d8bc8f;outline-offset:3px}
+.chat-painted.effect-15{border:3px solid transparent;background:linear-gradient(var(--bubble-bg),var(--bubble-bg)) padding-box,radial-gradient(circle at 15% 10%,#e9d08e,var(--effect-color),#89cdd1) border-box}
+.chat-painted.effect-16{border:4px double var(--effect-color);box-shadow:inset 0 0 0 2px #ffffffb0}
+.chat-painted.effect-17{border:3px solid transparent;background:linear-gradient(var(--bubble-bg),var(--bubble-bg)) padding-box,linear-gradient(110deg,#fbb5bc,#fdd792,#95d6bf,#a4b7ed) border-box}
+.chat-painted.effect-18{border-left:4px solid var(--effect-color);border-right:4px dotted var(--effect-color);border-top:2px solid #a5d9cf;border-bottom:2px solid #e7c992}
+.chat-painted.effect-19{border:2px solid var(--effect-color);outline:2px solid #a6d9d5;outline-offset:3px;animation:chat-border-breathe 3s ease-in-out infinite}
+.chat-painted.effect-20{border:4px solid transparent;background:linear-gradient(var(--bubble-bg),var(--bubble-bg)) padding-box,linear-gradient(105deg,var(--effect-color),#ffe494,#9df1e5,var(--effect-color)) border-box;background-size:100% 100%,250% 250%;animation:chat-shimmer 5s linear infinite}
+.ornament-flower-1{--sz:36px;--spin:-63deg;--hue:-34deg;--flip:-1;--opa:0.85}
+.ornament-branch-1{--sz:39px;--spin:-23deg;--hue:-33deg;--flip:1;--opa:0.83}
+.ornament-logo-1{--sz:34px;--spin:0deg;background:linear-gradient(19deg,hsl(29 49% 24%),hsl(107 53% 38%));border-radius:12px}
+.ornament-flower-2{--sz:41px;--spin:-26deg;--hue:-3deg;--flip:1;--opa:0.90}
+.ornament-branch-2{--sz:44px;--spin:-6deg;--hue:-16deg;--flip:1;--opa:0.87}
+.ornament-logo-2{--sz:38px;--spin:-11deg;background:linear-gradient(38deg,hsl(58 49% 24%),hsl(136 53% 38%));border-radius:17px}
+.ornament-flower-3{--sz:46px;--spin:11deg;--hue:28deg;--flip:-1;--opa:0.95}
+.ornament-branch-3{--sz:49px;--spin:11deg;--hue:1deg;--flip:-1;--opa:0.91}
+.ornament-logo-3{--sz:42px;--spin:0deg;background:linear-gradient(57deg,hsl(87 49% 24%),hsl(165 53% 38%));border-radius:22px}
+.ornament-flower-4{--sz:51px;--spin:48deg;--hue:59deg;--flip:1;--opa:0.80}
+.ornament-branch-4{--sz:54px;--spin:28deg;--hue:18deg;--flip:1;--opa:0.95}
+.ornament-logo-4{--sz:30px;--spin:-11deg;background:linear-gradient(76deg,hsl(116 49% 24%),hsl(194 53% 38%));border-radius:27px}
+.ornament-flower-5{--sz:31px;--spin:85deg;--hue:90deg;--flip:-1;--opa:0.85}
+.ornament-branch-5{--sz:59px;--spin:45deg;--hue:35deg;--flip:1;--opa:0.79}
+.ornament-logo-5{--sz:34px;--spin:0deg;background:linear-gradient(95deg,hsl(145 49% 24%),hsl(223 53% 38%));border-radius:7px}
+.ornament-flower-6{--sz:36px;--spin:122deg;--hue:121deg;--flip:1;--opa:0.90}
+.ornament-branch-6{--sz:34px;--spin:62deg;--hue:52deg;--flip:-1;--opa:0.83}
+.ornament-logo-6{--sz:38px;--spin:-11deg;background:linear-gradient(114deg,hsl(174 49% 24%),hsl(252 53% 38%));border-radius:12px}
+.ornament-flower-7{--sz:41px;--spin:159deg;--hue:-43deg;--flip:-1;--opa:0.95}
+.ornament-branch-7{--sz:39px;--spin:-31deg;--hue:69deg;--flip:1;--opa:0.87}
+.ornament-logo-7{--sz:42px;--spin:0deg;background:linear-gradient(133deg,hsl(203 49% 24%),hsl(281 53% 38%));border-radius:17px}
+.ornament-flower-8{--sz:46px;--spin:196deg;--hue:-12deg;--flip:1;--opa:0.80}
+.ornament-branch-8{--sz:44px;--spin:-14deg;--hue:-34deg;--flip:1;--opa:0.91}
+.ornament-logo-8{--sz:30px;--spin:-11deg;background:linear-gradient(152deg,hsl(232 49% 24%),hsl(310 53% 38%));border-radius:22px}
+.ornament-flower-9{--sz:51px;--spin:233deg;--hue:19deg;--flip:-1;--opa:0.85}
+.ornament-branch-9{--sz:49px;--spin:3deg;--hue:-17deg;--flip:-1;--opa:0.95}
+.ornament-logo-9{--sz:34px;--spin:0deg;background:linear-gradient(171deg,hsl(261 49% 24%),hsl(339 53% 38%));border-radius:27px}
+.ornament-flower-10{--sz:31px;--spin:-90deg;--hue:50deg;--flip:1;--opa:0.90}
+.ornament-branch-10{--sz:54px;--spin:20deg;--hue:0deg;--flip:1;--opa:0.79}
+.ornament-logo-10{--sz:38px;--spin:-11deg;background:linear-gradient(190deg,hsl(290 49% 24%),hsl(8 53% 38%));border-radius:7px}
+.ornament-flower-11{--sz:36px;--spin:-53deg;--hue:81deg;--flip:-1;--opa:0.95}
+.ornament-branch-11{--sz:59px;--spin:37deg;--hue:17deg;--flip:1;--opa:0.83}
+.ornament-logo-11{--sz:42px;--spin:0deg;background:linear-gradient(209deg,hsl(319 49% 24%),hsl(37 53% 38%));border-radius:12px}
+.ornament-flower-12{--sz:41px;--spin:-16deg;--hue:112deg;--flip:1;--opa:0.80}
+.ornament-branch-12{--sz:34px;--spin:54deg;--hue:34deg;--flip:-1;--opa:0.87}
+.ornament-logo-12{--sz:30px;--spin:-11deg;background:linear-gradient(228deg,hsl(348 49% 24%),hsl(66 53% 38%));border-radius:17px}
+.ornament-flower-13{--sz:46px;--spin:21deg;--hue:-52deg;--flip:-1;--opa:0.85}
+.ornament-branch-13{--sz:39px;--spin:-39deg;--hue:51deg;--flip:1;--opa:0.91}
+.ornament-logo-13{--sz:34px;--spin:0deg;background:linear-gradient(247deg,hsl(17 49% 24%),hsl(95 53% 38%));border-radius:22px}
+.ornament-flower-14{--sz:51px;--spin:58deg;--hue:-21deg;--flip:1;--opa:0.90}
+.ornament-branch-14{--sz:44px;--spin:-22deg;--hue:68deg;--flip:1;--opa:0.95}
+.ornament-logo-14{--sz:38px;--spin:-11deg;background:linear-gradient(266deg,hsl(46 49% 24%),hsl(124 53% 38%));border-radius:27px}
+.ornament-flower-15{--sz:31px;--spin:95deg;--hue:10deg;--flip:-1;--opa:0.95}
+.ornament-branch-15{--sz:49px;--spin:-5deg;--hue:-35deg;--flip:-1;--opa:0.79}
+.ornament-logo-15{--sz:42px;--spin:0deg;background:linear-gradient(285deg,hsl(75 49% 24%),hsl(153 53% 38%));border-radius:7px}
+.ornament-flower-16{--sz:36px;--spin:132deg;--hue:41deg;--flip:1;--opa:0.80}
+.ornament-branch-16{--sz:54px;--spin:12deg;--hue:-18deg;--flip:1;--opa:0.83}
+.ornament-logo-16{--sz:30px;--spin:-11deg;background:linear-gradient(304deg,hsl(104 49% 24%),hsl(182 53% 38%));border-radius:12px}
+.ornament-flower-17{--sz:41px;--spin:169deg;--hue:72deg;--flip:-1;--opa:0.85}
+.ornament-branch-17{--sz:59px;--spin:29deg;--hue:-1deg;--flip:1;--opa:0.87}
+.ornament-logo-17{--sz:34px;--spin:0deg;background:linear-gradient(323deg,hsl(133 49% 24%),hsl(211 53% 38%));border-radius:17px}
+.ornament-flower-18{--sz:46px;--spin:206deg;--hue:103deg;--flip:1;--opa:0.90}
+.ornament-branch-18{--sz:34px;--spin:46deg;--hue:16deg;--flip:-1;--opa:0.91}
+.ornament-logo-18{--sz:38px;--spin:-11deg;background:linear-gradient(342deg,hsl(162 49% 24%),hsl(240 53% 38%));border-radius:22px}
+.ornament-flower-19{--sz:51px;--spin:243deg;--hue:-61deg;--flip:-1;--opa:0.95}
+.ornament-branch-19{--sz:39px;--spin:63deg;--hue:33deg;--flip:1;--opa:0.95}
+.ornament-logo-19{--sz:42px;--spin:0deg;background:linear-gradient(1deg,hsl(191 49% 24%),hsl(269 53% 38%));border-radius:27px}
+.ornament-flower-20{--sz:31px;--spin:-80deg;--hue:-30deg;--flip:1;--opa:0.80}
+.ornament-branch-20{--sz:44px;--spin:-30deg;--hue:50deg;--flip:1;--opa:0.79}
+.ornament-logo-20{--sz:30px;--spin:-11deg;background:linear-gradient(20deg,hsl(220 49% 24%),hsl(298 53% 38%));border-radius:7px}

@@ -8,18 +8,28 @@ import zipfile
 
 FORMAT = 'forma-sqlite-v1'
 BUSINESS = ('users', 'tasks', 'entries', 'cell_comments', 'attendance',
-            'daily_hours', 'personal_hours', 'activity', 'chat_messages')
-# Chat messages are real data and must trigger Google Drive backup checks;
-# login/logout and prank audit events alone do not.
-CONTENT_TABLES = tuple(t for t in BUSINESS if t != 'activity')
-# Pre-chat backups stay restorable; the missing table is added to an in-memory copy.
-REQUIRED = (set(BUSINESS) - {'chat_messages'}) | {'sessions', 'prank_presence', 'prank_events'}
+            'daily_hours', 'personal_hours', 'activity', 'chat_messages', 'chat_reads', 'chat_themes')
+# Reading messages does not create an hourly backup; new messages do.
+CONTENT_TABLES = tuple(t for t in BUSINESS if t not in ('activity','chat_reads'))
+# Old ZIPs had no chat tables; avatars are deliberately absent from EVERY ZIP.
+REQUIRED = (set(BUSINESS) - {'chat_messages','chat_reads','chat_themes'}) | {'sessions', 'prank_presence', 'prank_events'}
 CHAT_SCHEMA = '''CREATE TABLE IF NOT EXISTS chat_messages (
  id INTEGER PRIMARY KEY, sender_id INTEGER NOT NULL REFERENCES users(id),
  recipient_id INTEGER REFERENCES users(id), body TEXT NOT NULL,
- created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ style_json TEXT NOT NULL DEFAULT '{}');
  CREATE INDEX IF NOT EXISTS idx_chat_recipient ON chat_messages(recipient_id,id);
- CREATE INDEX IF NOT EXISTS idx_chat_sender ON chat_messages(sender_id,id);'''
+ CREATE INDEX IF NOT EXISTS idx_chat_sender ON chat_messages(sender_id,id);
+ CREATE TABLE IF NOT EXISTS chat_reads (
+ user_id INTEGER NOT NULL REFERENCES users(id), room_key TEXT NOT NULL,
+ last_read_id INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id,room_key));
+ CREATE TABLE IF NOT EXISTS chat_themes (
+ room_key TEXT PRIMARY KEY, theme_json TEXT NOT NULL,
+ updated_by INTEGER NOT NULL REFERENCES users(id),
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+ CREATE TABLE IF NOT EXISTS user_avatars (
+ user_id INTEGER PRIMARY KEY REFERENCES users(id), image_b64 TEXT NOT NULL DEFAULT '',
+ mime TEXT NOT NULL DEFAULT '', image_url TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1);'''
 MAX_ARCHIVE = 25 * 1024 * 1024
 MAX_DATABASE = 100 * 1024 * 1024
 
@@ -59,8 +69,10 @@ def validate(con):
         tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not REQUIRED.issubset(tables):
             raise BackupError('Архив не соответствует текущему формату Forma')
-        if 'chat_messages' not in tables:
-            con.executescript(CHAT_SCHEMA)  # Старый архив, без переписки.
+        if not {'chat_messages','chat_reads','chat_themes','user_avatars'}.issubset(tables):
+            con.executescript(CHAT_SCHEMA)  # Старый архив: создать недостающие таблицы.
+        if 'style_json' not in {row[1] for row in con.execute('PRAGMA table_info(chat_messages)')}:
+            con.execute("ALTER TABLE chat_messages ADD COLUMN style_json TEXT NOT NULL DEFAULT '{}'")
         cols = {row[1] for row in con.execute('PRAGMA table_info(users)')}
         if not {'id','username','role','is_staff','password_hash'}.issubset(cols):
             raise BackupError('Архив не содержит сведения о сотрудниках и правах доступа')
@@ -76,9 +88,12 @@ def archive(con):
     """SQLite online backup; passwords/roles kept, live sessions and fleeting events removed."""
     with sqlite3.connect(':memory:') as snapshot:
         con.backup(snapshot)
-        for table in ('sessions', 'prank_presence', 'prank_events'):
+        for table in ('sessions', 'prank_presence', 'prank_events', 'user_avatars'):
             snapshot.execute(f'DELETE FROM {table}')
         snapshot.commit()
+        # DELETE clears rows but may leave their image bytes in SQLite free pages.
+        # VACUUM compacts the file so even raw ZIP contents contain no avatar pixels.
+        snapshot.execute('VACUUM')
         data = bytearray(snapshot.serialize())
         # sqlite3.backup из WAL оставляет в заголовке флаги WAL (2,2), хотя
         # сериализованная in-memory копия уже не содержит отдельного WAL-файла.

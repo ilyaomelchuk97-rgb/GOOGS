@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "forma-d1-bridge",
+  "main": "src/index.js",
+  "compatibility_date": "2026-04-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "forma-db",
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "triggers": {
+    "crons": ["*/10 * * * *"]
+  }
+}
