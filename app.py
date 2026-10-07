@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parent
 DB = ROOT / 'worktrack.sqlite3'
 BACKUP_DIR = ROOT / 'backups'
 DB_LOCK = threading.RLock()
-BUILD_ID = '20261007-29'  # Public /health marker to verify which build Render actually serves.
+BUILD_ID = '20261007-30'  # Public /health marker to verify which build Render actually serves.
 # New effects reuse the existing CHECK(kind IN ('people','speech')) table safely.
 # This keeps old production D1/SQLite backups and schema compatible.
 PRANK_EFFECT_PREFIX = '\x1eFORMA_EFFECT_V1:'
@@ -788,15 +788,21 @@ class Handler(BaseHTTPRequestHandler):
         rows=json_rows(db.execute('''SELECT t.id task_id,t.title,t.unit,t.norm,t.category,u.id user_id,u.name,
             ROUND(SUM(e.quantity),3) quantity,ROUND(SUM(e.quantity)*t.norm,3) hours
             FROM entries e JOIN tasks t ON t.id=e.task_id JOIN users u ON u.id=e.user_id
-            WHERE e.work_date BETWEEN ? AND ? GROUP BY t.id,u.id ORDER BY t.id,u.name''',(first,last)).fetchall())
-        users=json_rows(db.execute('SELECT id,name FROM users WHERE is_staff=1 ORDER BY name').fetchall())
+            WHERE e.work_date BETWEEN ? AND ? AND u.role='employee' AND u.is_staff=1
+            GROUP BY t.id,u.id ORDER BY t.id,u.name''',(first,last)).fetchall())
+        users=json_rows(db.execute("SELECT id,name FROM users WHERE is_staff=1 AND role='employee' ORDER BY name").fetchall())
         tasks=json_rows(db.execute('SELECT id,title,unit,norm,category,active FROM tasks ORDER BY id').fetchall())
-        attendance=json_rows(db.execute('SELECT user_id,day,status,reason FROM attendance WHERE day BETWEEN ? AND ?',(first,last)).fetchall())
+        attendance=json_rows(db.execute('''SELECT a.user_id,a.day,a.status,a.reason FROM attendance a
+            JOIN users u ON u.id=a.user_id WHERE a.day BETWEEN ? AND ?
+            AND u.role='employee' AND u.is_staff=1''',(first,last)).fetchall())
         daily_hours=json_rows(db.execute('SELECT day,hours FROM daily_hours WHERE day BETWEEN ? AND ?',(first,last)).fetchall())
-        personal_hours=json_rows(db.execute('SELECT user_id,day,hours FROM personal_hours WHERE day BETWEEN ? AND ?',(first,last)).fetchall())
+        personal_hours=json_rows(db.execute('''SELECT p.user_id,p.day,p.hours FROM personal_hours p
+            JOIN users u ON u.id=p.user_id WHERE p.day BETWEEN ? AND ?
+            AND u.role='employee' AND u.is_staff=1''',(first,last)).fetchall())
         comments=json_rows(db.execute('''SELECT c.user_id,c.task_id,c.work_date,c.body,u.name,t.title
             FROM cell_comments c JOIN users u ON u.id=c.user_id JOIN tasks t ON t.id=c.task_id
-            WHERE c.work_date BETWEEN ? AND ? ORDER BY c.work_date,u.name''',(first,last)).fetchall())
+            WHERE c.work_date BETWEEN ? AND ? AND u.role='employee' AND u.is_staff=1
+            ORDER BY c.work_date,u.name''',(first,last)).fetchall())
         return rows,users,tasks,attendance,daily_hours,personal_hours,comments,first,last
     def report(self,db,user,q):
         month=q.get('month',[TODAY().strftime('%Y-%m')])[0]
@@ -1034,7 +1040,7 @@ class Handler(BaseHTTPRequestHandler):
         at.freeze_panes='B2'
         detail=wb.create_sheet('Записи');detail.append(['Дата','Сотрудник','Работа','Количество','Ед. изм.','Примечание'])
         for cell in detail[1]:cell.fill=PatternFill('solid',fgColor=navy);cell.font=Font(bold=True,color='FFFFFF')
-        entries=db.execute('''SELECT e.work_date,u.name,t.title,e.quantity,t.unit,e.note FROM entries e JOIN users u ON u.id=e.user_id JOIN tasks t ON t.id=e.task_id WHERE e.work_date BETWEEN ? AND ? ORDER BY e.work_date,u.name''',(first,last)).fetchall()
+        entries=db.execute('''SELECT e.work_date,u.name,t.title,e.quantity,t.unit,e.note FROM entries e JOIN users u ON u.id=e.user_id JOIN tasks t ON t.id=e.task_id WHERE e.work_date BETWEEN ? AND ? AND u.role='employee' AND u.is_staff=1 ORDER BY e.work_date,u.name''',(first,last)).fetchall()
         for entry in entries: detail.append(list(entry))
         for col,width in {'A':17,'B':24,'C':76,'D':18,'E':15,'F':45}.items():detail.column_dimensions[col].width=width
         detail.freeze_panes='C2';detail.auto_filter.ref=f'A1:F{detail.max_row}'
