@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parent
 DB = ROOT / 'worktrack.sqlite3'
 BACKUP_DIR = ROOT / 'backups'
 DB_LOCK = threading.RLock()
-BUILD_ID = '20261007-30'  # Public /health marker to verify which build Render actually serves.
+BUILD_ID = '20261007-31'  # Public /health marker to verify which build Render actually serves.
 # New effects reuse the existing CHECK(kind IN ('people','speech')) table safely.
 # This keeps old production D1/SQLite backups and schema compatible.
 PRANK_EFFECT_PREFIX = '\x1eFORMA_EFFECT_V1:'
@@ -87,6 +87,12 @@ def init_db():
           hours REAL NOT NULL CHECK(hours BETWEEN 0 AND 24),
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           PRIMARY KEY(user_id,day));
+        CREATE TABLE IF NOT EXISTS chat_messages (
+          id INTEGER PRIMARY KEY, sender_id INTEGER NOT NULL REFERENCES users(id),
+          recipient_id INTEGER REFERENCES users(id), body TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE INDEX IF NOT EXISTS idx_chat_recipient ON chat_messages(recipient_id,id);
+        CREATE INDEX IF NOT EXISTS idx_chat_sender ON chat_messages(sender_id,id);
         CREATE TABLE IF NOT EXISTS sessions (
           token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
           expires_at TEXT NOT NULL);
@@ -104,12 +110,12 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_prank_events_target ON prank_events(target_id,id);
         ''')
         # Право администратора отдельно от принадлежности к сотрудникам: повышение
-        # работника не должно удалять его работы из табеля и сводного отчёта.
+        # не удаляет личные работы и табель. Сводный отчёт отдельно фильтрует роль.
         if 'is_staff' not in [col[1] for col in db.execute('PRAGMA table_info(users)')]:
             db.execute('ALTER TABLE users ADD COLUMN is_staff INTEGER NOT NULL DEFAULT 1')
         db.execute("UPDATE users SET is_staff=0 WHERE username='admin' AND role='admin' AND is_staff<>0")
         # Исправляем старые повышения, при которых работнику вместе с ролью admin
-        # ошибочно ставили is_staff=0: это прятало его из отчётов и табеля.
+        # ошибочно ставили is_staff=0: это скрывало его из табеля и общих графиков.
         # Сохраняем одну исходную нештатную учётную запись администратора.
         primary=db.execute('''SELECT id FROM users WHERE role='admin' AND is_staff=0
             ORDER BY CASE WHEN username='admin' THEN 0 ELSE 1 END,created_at,id LIMIT 1''').fetchone()
@@ -374,6 +380,8 @@ class Handler(BaseHTTPRequestHandler):
                 if path=='/api/prank/online' and method=='GET': return self.prank_online(db,self.require(db,True))
                 if path=='/api/prank/send' and method=='POST': return self.prank_send(db,self.require(db,True),self.body())
                 if path=='/api/bootstrap' and method=='GET': return self.bootstrap(db,user,q)
+                if path=='/api/chat' and method=='GET': return self.chat_list(db,user,q)
+                if path=='/api/chat' and method=='POST': return self.chat_send(db,user,self.body())
                 if path=='/api/entries' and method=='POST': return self.save_entry(db,user,self.body())
                 if path=='/api/comments' and method=='POST': return self.save_comment(db,user,self.body())
                 if path.startswith('/api/entries/') and method=='PATCH': return self.edit_entry(db,user,path,self.body())
@@ -462,6 +470,7 @@ class Handler(BaseHTTPRequestHandler):
         safe_path.chmod(0o600)
         with sqlite3.connect(':memory:') as source:
             source.deserialize(data)
+            backup_tools.validate(source)  # Дополняет старые архивы пустой таблицей чата.
             if isinstance(db,d1_store.D1Connection): d1_store.replace_atomic(db,source)
             else: source.backup(db)
         if not isinstance(db,d1_store.D1Connection):
@@ -783,6 +792,66 @@ class Handler(BaseHTTPRequestHandler):
         if len(new)<8: raise APIError(400,'Новый пароль не менее 8 символов')
         db.execute('UPDATE users SET password_hash=? WHERE id=?',(hashed_password(new),user['id']))
         log(db,user['id'],'password','Пароль изменён'); db.commit(); self.send_json({'ok':True})
+    def chat_list(self,db,user,q):
+        """Only group messages or direct messages involving this user; last 100 + polling."""
+        room=q.get('room',['general'])[0]
+        if room=='general':
+            where='m.recipient_id IS NULL';params=[]
+        else:
+            try: peer=int(room)
+            except (TypeError,ValueError): raise APIError(400,'Некорректный собеседник')
+            if peer<=0 or peer==user['id'] or str(peer)!=room:
+                raise APIError(400,'Некорректный собеседник')
+            if not db.execute('SELECT id FROM users WHERE id=?',(peer,)).fetchone():
+                raise APIError(404,'Собеседник не найден')
+            where='((m.sender_id=? AND m.recipient_id=?) OR (m.sender_id=? AND m.recipient_id=?))'
+            params=[user['id'],peer,peer,user['id']]
+        after=q.get('after',[None])[0];before=q.get('before',[None])[0]
+        if after is not None and before is not None: raise APIError(400,'Выберите одну границу истории')
+        if after is None:
+            older_params=list(params)
+            if before is not None:
+                try: boundary=int(before)
+                except (TypeError,ValueError): raise APIError(400,'Некорректный номер сообщения')
+                if boundary<=0 or str(boundary)!=before: raise APIError(400,'Некорректный номер сообщения')
+                older_params.append(boundary)
+            condition=' AND m.id<?' if before is not None else ''
+            sql='''SELECT m.id,m.sender_id,m.recipient_id,m.body,m.created_at,u.name sender_name
+                     FROM chat_messages m JOIN users u ON u.id=m.sender_id
+                     WHERE '''+where+condition+' ORDER BY m.id DESC LIMIT 100'
+            messages=json_rows(db.execute(sql,older_params).fetchall())[::-1]
+            if messages:
+                check='SELECT 1 FROM chat_messages m WHERE '+where+' AND m.id<? LIMIT 1'
+                has_more=bool(db.execute(check,params+[messages[0]['id']]).fetchone())
+            else: has_more=False
+        else:
+            try: offset=int(after)
+            except (TypeError,ValueError): raise APIError(400,'Некорректный номер сообщения')
+            if offset<0 or str(offset)!=after: raise APIError(400,'Некорректный номер сообщения')
+            sql='''SELECT m.id,m.sender_id,m.recipient_id,m.body,m.created_at,u.name sender_name
+                     FROM chat_messages m JOIN users u ON u.id=m.sender_id
+                     WHERE '''+where+' AND m.id>? ORDER BY m.id LIMIT 100'
+            messages=json_rows(db.execute(sql,params+[offset]).fetchall())
+            has_more=None
+        people=json_rows(db.execute('''SELECT id,name,role FROM users
+                WHERE active=1 AND id<>? ORDER BY name''',(user['id'],)).fetchall())
+        self.send_json({'messages':messages,'users':people,'has_more':has_more})
+    def chat_send(self,db,user,data):
+        recipient=data.get('recipient_id')
+        if recipient is not None:
+            if type(recipient) is not int or recipient<=0 or recipient==user['id']:
+                raise APIError(400,'Некорректный собеседник')
+            if not db.execute('SELECT id FROM users WHERE id=? AND active=1',(recipient,)).fetchone():
+                raise APIError(404,'Собеседник не найден или отключён')
+        text=data.get('body')
+        if not isinstance(text,str): raise APIError(400,'Введите сообщение')
+        text=text.strip()
+        if not text or len(text)>2000 or '\x00' in text:
+            raise APIError(400,'Сообщение: от 1 до 2000 символов')
+        cursor=db.execute('INSERT INTO chat_messages(sender_id,recipient_id,body) VALUES(?,?,?)',
+                          (user['id'],recipient,text))
+        db.commit()
+        self.send_json({'ok':True,'id':cursor.lastrowid})
     def report_data(self,db,month):
         first,last=month_range(month)
         rows=json_rows(db.execute('''SELECT t.id task_id,t.title,t.unit,t.norm,t.category,u.id user_id,u.name,

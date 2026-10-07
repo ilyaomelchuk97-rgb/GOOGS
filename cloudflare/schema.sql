@@ -32,6 +32,12 @@ CREATE TABLE IF NOT EXISTS users (
           hours REAL NOT NULL CHECK(hours BETWEEN 0 AND 24),
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           PRIMARY KEY(user_id,day));
+        CREATE TABLE IF NOT EXISTS chat_messages (
+          id INTEGER PRIMARY KEY, sender_id INTEGER NOT NULL REFERENCES users(id),
+          recipient_id INTEGER REFERENCES users(id), body TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE INDEX IF NOT EXISTS idx_chat_recipient ON chat_messages(recipient_id,id);
+        CREATE INDEX IF NOT EXISTS idx_chat_sender ON chat_messages(sender_id,id);
         CREATE TABLE IF NOT EXISTS sessions (
           token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
           expires_at TEXT NOT NULL);

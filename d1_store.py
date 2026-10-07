@@ -80,7 +80,7 @@ class D1Connection:
         verb=sql.lstrip().split(None,1)[0].upper()
         if verb in ('SELECT','WITH','PRAGMA','EXPLAIN'):
             return self.query(sql,params)
-        if re.match(r'\s*INSERT\s+INTO\s+(users|tasks)\s*\(',sql,re.IGNORECASE):
+        if re.match(r'\s*INSERT\s+INTO\s+(users|tasks|chat_messages)\s*\(',sql,re.IGNORECASE):
             return self.query(sql,params)
         if verb in ('BEGIN','COMMIT','ROLLBACK'): raise RemoteError('Use D1 batch instead of SQL transactions')
         self.pending.append({'sql':sql,'params':params})
@@ -112,7 +112,7 @@ class D1Connection:
 # Parents first for inserts, children first for deletes. Volatile login/presence tables
 # are intentionally not copied; users log in again after migration or restore.
 TABLES=('users','tasks','entries','cell_comments','attendance','daily_hours',
-        'personal_hours','activity','sessions','prank_presence','prank_events')
+        'personal_hours','activity','chat_messages','sessions','prank_presence','prank_events')
 
 def sqlite_snapshot(remote):
     """Download a consistent-enough SQLite snapshot for an admin backup.

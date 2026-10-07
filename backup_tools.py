@@ -8,11 +8,18 @@ import zipfile
 
 FORMAT = 'forma-sqlite-v1'
 BUSINESS = ('users', 'tasks', 'entries', 'cell_comments', 'attendance',
-            'daily_hours', 'personal_hours', 'activity')
-# Changes worth an automatic backup. Login/logout and prank audit events alone
-# are not new business data; activity is still included in the ZIP when saved.
-CONTENT_TABLES = BUSINESS[:-1]
-REQUIRED = set(BUSINESS) | {'sessions', 'prank_presence', 'prank_events'}
+            'daily_hours', 'personal_hours', 'activity', 'chat_messages')
+# Chat messages are real data and must trigger Google Drive backup checks;
+# login/logout and prank audit events alone do not.
+CONTENT_TABLES = tuple(t for t in BUSINESS if t != 'activity')
+# Pre-chat backups stay restorable; the missing table is added to an in-memory copy.
+REQUIRED = (set(BUSINESS) - {'chat_messages'}) | {'sessions', 'prank_presence', 'prank_events'}
+CHAT_SCHEMA = '''CREATE TABLE IF NOT EXISTS chat_messages (
+ id INTEGER PRIMARY KEY, sender_id INTEGER NOT NULL REFERENCES users(id),
+ recipient_id INTEGER REFERENCES users(id), body TEXT NOT NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+ CREATE INDEX IF NOT EXISTS idx_chat_recipient ON chat_messages(recipient_id,id);
+ CREATE INDEX IF NOT EXISTS idx_chat_sender ON chat_messages(sender_id,id);'''
 MAX_ARCHIVE = 25 * 1024 * 1024
 MAX_DATABASE = 100 * 1024 * 1024
 
@@ -52,6 +59,8 @@ def validate(con):
         tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not REQUIRED.issubset(tables):
             raise BackupError('Архив не соответствует текущему формату Forma')
+        if 'chat_messages' not in tables:
+            con.executescript(CHAT_SCHEMA)  # Старый архив, без переписки.
         cols = {row[1] for row in con.execute('PRAGMA table_info(users)')}
         if not {'id','username','role','is_staff','password_hash'}.issubset(cols):
             raise BackupError('Архив не содержит сведения о сотрудниках и правах доступа')
