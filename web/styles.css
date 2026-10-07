@@ -53,7 +53,7 @@
 .sheet-panel{background:#fff;border:1px solid #e9eef1;border-radius:15px;box-shadow:var(--shadow);overflow:hidden}
 .sheet-toolbar{padding:13px 17px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #e7eef0}
 .sheet-toolbar-meta{display:flex;align-items:center;gap:13px;color:#9aabb6;font-size:14px;font-weight:700}
-.work-sheet-scroll{overflow:auto;max-height:min(72vh,750px);scrollbar-width:thin;scrollbar-color:#abcac4 #eef5f3}
+.work-sheet-scroll{overflow-x:auto;overflow-y:visible;max-height:none;scrollbar-width:thin;scrollbar-color:#abcac4 #eef5f3}
 .work-sheet{border-collapse:separate;border-spacing:0;table-layout:fixed;width:max-content;min-width:100%;font-variant-numeric:tabular-nums}
 .work-sheet th,.work-sheet td{box-sizing:border-box;border-right:1px solid #edf1f2;border-bottom:1px solid #edf1f2;vertical-align:middle;padding:0}
 .work-sheet thead th{position:sticky;top:0;height:56px;background:#f0f7f5;color:#587a7b;font-size:14px;font-weight:800;z-index:3;text-align:center}
@@ -231,7 +231,8 @@
 @keyframes parade-step{from{transform:translateY(1px) rotate(-5deg)}to{transform:translateY(-9px) rotate(5deg)}}
 @keyframes parade-cross{from{transform:translate3d(-550px,0,0)}to{transform:translate3d(calc(100vw + 20px),0,0)}}
 @media(max-width:600px){.prank-cat-bob .prank-cat-sprite{width:190px;height:133px}.prank-cat-bubble{bottom:137px;width:205px}.prank-cat-runner{height:240px}.prank-achievement-toast{top:68px}.prank-parade-track{width:350px}}
-@media(prefers-reduced-motion:reduce){.prank-cat-runner{animation:none;transform:translateX(max(12px,calc((100vw - 270px)/2)))}.prank-cat-sprite,.prank-cat-bob,.prank-parade-march span{animation:none}.prank-achievement-toast{animation:none;opacity:1}.prank-confetti{display:none}.prank-parade-track{animation:none;transform:translateX(max(12px,calc((100vw - 520px)/2)))}}
+/* Приколы запускаются только по явному действию администратора. Даже если в Windows
+   отключены обычные эффекты интерфейса, в Edge кот, конфетти и парад двигаются. */
 
 
 /* Always-closed navigation and readable, full-width pages. */
@@ -267,3 +268,6 @@ body.menu-open{overflow:hidden}
 @media(max-width:740px){.content{padding:19px 12px 42px}.topbar{padding-left:12px;padding-right:12px}.sidebar{width:min(302px,calc(100vw - 42px))}}
 @media(max-width:480px){.page-head h1{font-size:26px}.stat-card{padding:15px}.stat-label{font-size:12px}}
 @media(prefers-reduced-motion:reduce){.sidebar{transition:none}}
+
+/* ФИО целиком в приветствии не должно выталкивать страницу за экран. */
+.page-head h1{overflow-wrap:anywhere}
