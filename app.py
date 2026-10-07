@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parent
 DB = ROOT / 'worktrack.sqlite3'
 BACKUP_DIR = ROOT / 'backups'
 DB_LOCK = threading.RLock()
+BUILD_ID = '20261006-28'  # Public /health marker to verify which build Render actually serves.
 # New effects reuse the existing CHECK(kind IN ('people','speech')) table safely.
 # This keeps old production D1/SQLite backups and schema compatible.
 PRANK_EFFECT_PREFIX = '\x1eFORMA_EFFECT_V1:'
@@ -107,6 +108,14 @@ def init_db():
         if 'is_staff' not in [col[1] for col in db.execute('PRAGMA table_info(users)')]:
             db.execute('ALTER TABLE users ADD COLUMN is_staff INTEGER NOT NULL DEFAULT 1')
         db.execute("UPDATE users SET is_staff=0 WHERE username='admin' AND role='admin' AND is_staff<>0")
+        # Исправляем старые повышения, при которых работнику вместе с ролью admin
+        # ошибочно ставили is_staff=0: это прятало его из отчётов и табеля.
+        # Сохраняем одну исходную нештатную учётную запись администратора.
+        primary=db.execute('''SELECT id FROM users WHERE role='admin' AND is_staff=0
+            ORDER BY CASE WHEN username='admin' THEN 0 ELSE 1 END,created_at,id LIMIT 1''').fetchone()
+        if primary:
+            db.execute('UPDATE users SET is_staff=1 WHERE role=? AND is_staff=0 AND id<>?',
+                       ('admin',primary['id']))
         # Перенос комментариев из старых записей при обновлении существующей базы.
         db.execute('''INSERT OR IGNORE INTO cell_comments(user_id,task_id,work_date,body)
             SELECT user_id,task_id,work_date,note FROM entries WHERE note<>?''',('',))
@@ -308,7 +317,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed=urlparse(self.path); path=parsed.path; q=parse_qs(parsed.query)
         try:
             if path=='/health' and method=='GET':
-                return self.send_json({'ok':True,'service':'Forma','backend':os.environ.get('DATABASE_BACKEND','sqlite')})
+                return self.send_json({'ok':True,'service':'Forma','backend':os.environ.get('DATABASE_BACKEND','sqlite'),'build':BUILD_ID})
             if path=='/setup' and method=='GET':
                 return self.setup_page()
             if path=='/setup/import' and method=='POST':
@@ -705,6 +714,9 @@ class Handler(BaseHTTPRequestHandler):
             if role not in ('admin','employee'): raise APIError(400,'Некорректные права доступа')
             if uid==user['id'] and role!='admin': raise APIError(400,'Нельзя снять права администратора с самого себя')
             updates.append('role=?'); params.append(role)
+            # Права администратора не забирают у человека статус сотрудника:
+            # он остаётся в личной таблице, графиках, табеле и отчётах.
+            if role=='admin': updates.append('is_staff=1')
             if target['role']=='admin' and role=='employee':
                 db.execute('DELETE FROM sessions WHERE user_id=?',(uid,))
         if 'active' in data:
@@ -803,46 +815,142 @@ class Handler(BaseHTTPRequestHandler):
             from openpyxl.utils import get_column_letter
         except ImportError: raise APIError(500,'Для экспорта Excel установите openpyxl')
         wb=Workbook(); ws=wb.active; ws.title='Сводный отчёт'
-        navy='142238'; teal='159F8D'; pale='EAF5F2'; muted='66788B'
-        ws.merge_cells('A1:F1'); ws['A1']=f'Сводный отчёт · {month}'; ws['A1'].font=Font(name='Calibri',size=18,bold=True,color='FFFFFF'); ws['A1'].fill=PatternFill('solid',fgColor=navy); ws['A1'].alignment=Alignment(vertical='center'); ws.row_dimensions[1].height=42
-        ws.merge_cells('A2:F2'); ws['A2']='Количество и нормативное время по каждому сотруднику'; ws['A2'].font=Font(color=muted,italic=True)
-        ws.append(['Работа','Ед. изм.','Норма, ч/ед.','Сотрудник','Количество','Время, ч'])
-        for cell in ws[3]: cell.fill=PatternFill('solid',fgColor=teal);cell.font=Font(bold=True,color='FFFFFF');cell.alignment=Alignment(vertical='center')
-        ws.row_dimensions[3].height=27
-        for row in rows:
-            ws.append([row['title'],row['unit'],row['norm'],row['name'],row['quantity'],row['hours']])
-            r=ws.max_row
-            if r%2==0:
-                for c in ws[r]: c.fill=PatternFill('solid',fgColor='F3F7F8')
-            ws.cell(r,5).number_format='#,##0.###'; ws.cell(r,6).number_format='#,##0.00'
-        ws.append(['ИТОГО','','','',sum(x['quantity'] for x in rows),round(sum(x['hours'] for x in rows),2)])
-        for c in ws[ws.max_row]:c.fill=PatternFill('solid',fgColor=navy);c.font=Font(bold=True,color='FFFFFF')
-        for col,width in {'A':76,'B':20,'C':18,'D':24,'E':18,'F':18}.items():ws.column_dimensions[col].width=width
-        ws.freeze_panes='D4'; ws.auto_filter.ref=f'A3:F{len(rows)+3}'
-        section=ws.max_row+2
-        ws.merge_cells(start_row=section,start_column=1,end_row=section,end_column=6)
-        ws.cell(section,1,'Производительность по сотрудникам · '+month)
-        ws.cell(section,1).fill=PatternFill('solid',fgColor=navy)
-        ws.cell(section,1).font=Font(size=13,bold=True,color='FFFFFF')
-        ws.row_dimensions[section].height=29
-        for col,label in enumerate(['Сотрудник','Нормо-часы, ч','Округлённые нормо-часы','Рабочие часы, ч','Производительность',''],1):
-            c=ws.cell(section+1,col,label);c.fill=PatternFill('solid',fgColor=teal);c.font=Font(bold=True,color='FFFFFF')
-        for offset,person in enumerate(productivity,section+2):
-            values=[person['name'],person['norm_hours'],person['rounded_norm_hours'],person['work_hours'],
-                    person['percent']/100 if person['percent'] is not None else None]
-            for col,value in enumerate(values,1):
-                c=ws.cell(offset,col,value)
-                if offset%2==0:c.fill=PatternFill('solid',fgColor='F3F7F8')
-            ws.cell(offset,5).number_format='0.00%'
-            ws.cell(offset,4).number_format='0.##'
-        total_row=section+2+len(productivity)
-        for col,value in enumerate(['ИТОГО ПО КОМАНДЕ',overall['norm_hours'],overall['rounded_norm_hours'],overall['work_hours'],
-                                    overall['percent']/100 if overall['percent'] is not None else None],1):
-            c=ws.cell(total_row,col,value);c.fill=PatternFill('solid',fgColor='DFF2EA');c.font=Font(bold=True,color='117C64')
-        ws.cell(total_row,5).number_format='0.00%'
-        ws.merge_cells(start_row=total_row+2,start_column=1,end_row=total_row+2,end_column=6)
-        ws.cell(total_row+2,1,'Формула как в исходном Excel: ROUND(нормо-часы, 0) / рабочие часы по табелю × 100 %. При 0 рабочих часов процент не рассчитывается.')
-        ws.cell(total_row+2,1).font=Font(italic=True,color=muted,size=10)
+        navy='173347'; teal='158E77'; pale='E7F5EE'; muted='5F7885'
+        light='F4F8F9'; line='DFE9EB'; white='FFFFFF'
+        ws.sheet_view.showGridLines=False
+        end_col=4+len(users)  # A: работа, B: ед., C: норма, далее сотрудники, последний: итог
+        summary_end=max(end_col,8)
+        month_label=['январь','февраль','март','апрель','май','июнь',
+                     'июль','август','сентябрь','октябрь','ноябрь','декабрь'][int(month[5:])-1]+' '+month[:4]
+        ws.merge_cells(start_row=1,start_column=1,end_row=1,end_column=summary_end)
+        for col in range(1,summary_end+1): ws.cell(1,col).fill=PatternFill('solid',fgColor=navy)
+        title=ws.cell(1,1,'Сводный отчёт · '+month_label)
+        title.font=Font(name='Calibri',size=20,bold=True,color=white)
+        title.alignment=Alignment(vertical='center')
+        ws.row_dimensions[1].height=46
+        ws.merge_cells(start_row=2,start_column=1,end_row=2,end_column=summary_end)
+        subtitle=ws.cell(2,1,'Все результаты команды, собранные из персональных записей')
+        subtitle.font=Font(name='Calibri',size=12,color=muted)
+        ws.row_dimensions[2].height=25
+        summary=[('СУММА КОЛИЧЕСТВА*',sum(float(x['quantity']) for x in rows)),
+                 ('НОРМАТИВНОЕ ВРЕМЯ',round(sum(float(x['hours']) for x in rows),2)),
+                 ('РАБОЧИХ ЧАСОВ ПО ТАБЕЛЮ',overall['work_hours']),
+                 ('СОТРУДНИКОВ В ОТЧЁТЕ',f'{len({x["user_id"] for x in rows})} / {len(users)}')]
+        for idx,(label,value) in enumerate(summary):
+            left=1+(idx*summary_end)//4
+            right=((idx+1)*summary_end)//4
+            ws.merge_cells(start_row=4,start_column=left,end_row=4,end_column=right)
+            ws.merge_cells(start_row=5,start_column=left,end_row=5,end_column=right)
+            for col in range(left,right+1):
+                for rownum in (4,5): ws.cell(rownum,col).fill=PatternFill('solid',fgColor=light)
+            label_cell=ws.cell(4,left,label)
+            label_cell.font=Font(name='Calibri',size=10,bold=True,color=muted)
+            label_cell.alignment=Alignment(vertical='center',wrap_text=True,indent=1)
+            value_cell=ws.cell(5,left,value)
+            value_cell.font=Font(name='Calibri',size=17,bold=True,color=navy)
+            value_cell.alignment=Alignment(vertical='center',indent=1)
+            if idx in (0,1,2): value_cell.number_format='#,##0.##'
+        ws.row_dimensions[4].height=27;ws.row_dimensions[5].height=35
+        ws.merge_cells(start_row=7,start_column=1,end_row=7,end_column=summary_end)
+        caption=ws.cell(7,1,'Сводная таблица · '+month_label+' · количество / нормо-часы')
+        caption.font=Font(name='Calibri',size=12,bold=True,color=teal)
+        ws.row_dimensions[7].height=25
+        header_row=8
+        labels=['Выполняемая работа','Ед.','Норма, ч']+[x['name'] for x in users]+['Итого']
+        for col,label in enumerate(labels,1):
+            cell=ws.cell(header_row,col,label)
+            cell.fill=PatternFill('solid',fgColor=navy)
+            cell.font=Font(name='Calibri',size=11,bold=True,color=white)
+            cell.alignment=Alignment(vertical='center',horizontal='left' if col==1 else 'center',wrap_text=True)
+        ws.row_dimensions[header_row].height=47
+        by_task_user={(x['task_id'],x['user_id']):x for x in rows}
+        recorded_tasks={x['task_id'] for x in rows}
+        displayed_tasks=[x for x in tasks if x['active'] or x['id'] in recorded_tasks]
+        qty_format='#,##0.##';hours_format='#,##0.##" ч"'
+        for index,task in enumerate(displayed_tasks):
+            number_row=header_row+1+index*2
+            hours_row=number_row+1
+            background=white if index%2==0 else light
+            name=ws.cell(number_row,1,task['title'])
+            name.font=Font(name='Calibri',size=12,bold=True,color=navy)
+            name.alignment=Alignment(vertical='center',wrap_text=True,indent=1)
+            category=ws.cell(hours_row,1,task['category'])
+            category.font=Font(name='Calibri',size=10,italic=True,color=muted)
+            category.alignment=Alignment(vertical='center',indent=2,wrap_text=True)
+            ws.cell(number_row,2,task['unit'])
+            norm=ws.cell(number_row,3,task['norm']);norm.number_format='#,##0.###'
+            task_qty=0;task_hours=0
+            for col,user in enumerate(users,4):
+                record=by_task_user.get((task['id'],user['id']))
+                if record:
+                    qty=float(record['quantity']);hours=float(record['hours'])
+                    task_qty+=qty;task_hours+=hours
+                    qcell=ws.cell(number_row,col,qty);qcell.number_format=qty_format
+                    hcell=ws.cell(hours_row,col,hours);hcell.number_format=hours_format
+                else:
+                    ws.cell(number_row,col,'—')
+            ws.cell(number_row,end_col,round(task_qty,3)).number_format=qty_format
+            ws.cell(hours_row,end_col,round(task_hours,3)).number_format=hours_format
+            for rownum in (number_row,hours_row):
+                for col in range(1,end_col+1):
+                    cell=ws.cell(rownum,col)
+                    cell.fill=PatternFill('solid',fgColor=pale if col==end_col else background)
+                    cell.border=Border(bottom=Side(style='hair',color=line) if rownum==hours_row else Side())
+                    if col>=4:cell.alignment=Alignment(vertical='center',horizontal='center')
+            for rownum in (number_row,hours_row):
+                c=ws.cell(rownum,end_col);c.font=Font(name='Calibri',size=11,bold=True,color='147B65')
+            ws.row_dimensions[number_row].height=min(95,max(29,16*(1+(len(task['title'])//58))))
+            ws.row_dimensions[hours_row].height=22
+        total_row=header_row+1+len(displayed_tasks)*2
+        def summary_row(rownum,label,values,fill,color,unit=''):
+            for col in range(1,end_col+1):
+                c=ws.cell(rownum,col)
+                c.fill=PatternFill('solid',fgColor=fill)
+                c.font=Font(name='Calibri',size=11,bold=True,color=color)
+                c.alignment=Alignment(vertical='center',horizontal='left' if col==1 else 'center',wrap_text=col==1)
+            ws.cell(rownum,1,label)
+            ws.cell(rownum,2,unit or '—')
+            ws.cell(rownum,3,'—')
+            for col,value in enumerate(values,4):
+                c=ws.cell(rownum,col,value)
+                if type(value) in (int,float): c.number_format=qty_format
+        quantities=[round(sum(float(x['quantity']) for x in rows if x['user_id']==u['id']),3) for u in users]
+        norm_hours=[round(sum(float(x['hours']) for x in rows if x['user_id']==u['id']),3) for u in users]
+        summary_row(total_row,'ИТОГО ПО КОМАНДЕ',quantities+[summary[0][1]],navy,white)
+        summary_row(total_row+1,'Нормо-часы',norm_hours+[round(sum(float(x['hours']) for x in rows),3)],navy,white,'ч')
+        for col in range(4,end_col+1):ws.cell(total_row+1,col).number_format=hours_format
+        ws.row_dimensions[total_row].height=30;ws.row_dimensions[total_row+1].height=24
+        work_hours={p['user_id']:p['work_hours'] for p in productivity}
+        summary_row(total_row+2,'РАБОЧИЕ ЧАСЫ ЗА МЕСЯЦ\nпо табелю · с учётом отсутствий',
+                    [work_hours.get(u['id'],0) for u in users]+[overall['work_hours']],
+                    'EAF2F5','3A687B','ч')
+        for col in range(4,end_col+1):ws.cell(total_row+2,col).number_format=hours_format
+        ws.row_dimensions[total_row+2].height=43
+        percentages={p['user_id']:p['percent'] for p in productivity}
+        summary_row(total_row+3,'ПРОИЗВОДИТЕЛЬНОСТЬ\nокруглённые нормо-часы / рабочие часы × 100 %',
+                    [percentages.get(u['id'])/100 if percentages.get(u['id']) is not None else '—' for u in users]
+                    +[overall['percent']/100 if overall['percent'] is not None else '—'],
+                    'DCF3E8','14765F','%')
+        for col in range(4,end_col+1):ws.cell(total_row+3,col).number_format='0.00%'
+        ws.row_dimensions[total_row+3].height=52
+        note_row=total_row+5
+        ws.merge_cells(start_row=note_row,start_column=1,end_row=note_row,end_column=summary_end)
+        note=ws.cell(note_row,1,'* Общая сумма количества объединяет разные единицы измерения. Сравнивайте результаты по видам работ или нормо-часам. Производительность = округлённые нормо-часы / рабочие часы по табелю × 100 %. При 0 рабочих часов: «—».')
+        note.font=Font(name='Calibri',size=11,color=muted)
+        note.alignment=Alignment(vertical='center',wrap_text=True)
+        ws.row_dimensions[note_row].height=42
+        ws.column_dimensions['A'].width=67
+        ws.column_dimensions['B'].width=14
+        ws.column_dimensions['C'].width=16
+        for col in range(4,end_col):ws.column_dimensions[get_column_letter(col)].width=25
+        ws.column_dimensions[get_column_letter(end_col)].width=22
+        ws.freeze_panes='D9'
+        ws.print_options.horizontalCentered=True
+        ws.page_setup.orientation='landscape'
+        ws.page_setup.paperSize=ws.PAPERSIZE_A3
+        ws.sheet_properties.pageSetUpPr.fitToPage=True
+        ws.page_setup.fitToWidth=1;ws.page_setup.fitToHeight=0
+        ws.print_title_rows='1:8'
         at=wb.create_sheet('Табель 5-2'); day_count=int(last[-2:])
         at.append(['Сотрудник']+[str(i) for i in range(1,day_count+1)]+['Рабочих дней','Отсутствий','Часов по табелю'])
         for cell in at[1]:cell.fill=PatternFill('solid',fgColor=navy);cell.font=Font(bold=True,color='FFFFFF')
