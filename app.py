@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parent
 DB = ROOT / 'worktrack.sqlite3'
 BACKUP_DIR = ROOT / 'backups'
 DB_LOCK = threading.RLock()
-BUILD_ID = '20261007-34'  # Public /health marker to verify which build Render actually serves.
+BUILD_ID = '20261007-37'  # Public /health marker to verify which build Render actually serves.
 # New effects reuse the existing CHECK(kind IN ('people','speech')) table safely.
 # This keeps old production D1/SQLite backups and schema compatible.
 PRANK_EFFECT_PREFIX = '\x1eFORMA_EFFECT_V1:'
@@ -155,9 +155,10 @@ def valid_password(stored, password):
     except (ValueError, TypeError): return False
 
 def json_rows(rows): return [dict(r) for r in rows]
-CHAT_STYLE_KEYS = {'bubble', 'glow', 'glow_color', 'border_effect', 'flower', 'branch', 'logo'}
+CHAT_STYLE_KEYS = {'bubble', 'bubble_alpha', 'glow', 'glow_color', 'glow_alpha',
+                   'border_effect', 'flower', 'branch', 'logo'}
 def valid_chat_style(style):
-    """Strict finite palette / 20 variant indexes; never store arbitrary CSS or HTML."""
+    """Strict finite color, opacity and ornament indexes; never store arbitrary CSS."""
     if style is None: return {}
     if not isinstance(style,dict) or set(style)-CHAT_STYLE_KEYS:
         raise APIError(400,'Некорректное оформление чата')
@@ -171,11 +172,18 @@ def valid_chat_style(style):
     if 'glow' in style:
         if type(style['glow']) is not bool:raise APIError(400,'Некорректная настройка подсветки')
         clean['glow']=style['glow']
+    for key in ('bubble_alpha','glow_alpha'):
+        if key in style:
+            value=style[key]
+            if type(value) is not int or not 0<=value<=100:
+                raise APIError(400,'Прозрачность: от 0 до 100 процентов')
+            clean[key]=value
     for key in ('border_effect','flower','branch','logo'):
         if key in style:
             value=style[key]
-            if type(value) is not int or not 0<=value<=20:
-                raise APIError(400,'Номер украшения: от 0 до 20')
+            limit=26 if key=='border_effect' else 20
+            if type(value) is not int or not 0<=value<=limit:
+                raise APIError(400,f'Номер украшения: от 0 до {limit}')
             clean[key]=value
     return clean
 
@@ -355,7 +363,9 @@ class Handler(BaseHTTPRequestHandler):
     def serve_static(self, path):
         if path=='/': path='/index.html'
         if path not in ('/index.html','/styles.css','/main.js','/courier-cat.png','/courier-cat-walk.png',
-                            '/chat-flower.png','/chat-branch.png','/mingas-official-logo.webp'): raise APIError(404,'Страница не найдена')
+                            '/chat-flower.png','/chat-branch.png','/mingas-official-logo.webp',
+                            '/effect-snake.png','/effect-comet.png','/effect-firefly.png',
+                            '/effect-electric.png','/effect-rain.png','/effect-aurora.png'): raise APIError(404,'Страница не найдена')
         file=ROOT/'web'/path[1:]
         data=file.read_bytes(); mime=mimetypes.guess_type(file.name)[0] or 'application/octet-stream'
         content_type=mime if mime.startswith('image/') else mime+'; charset=utf-8'
@@ -569,8 +579,12 @@ class Handler(BaseHTTPRequestHandler):
     def presence(self,db,user):
         """Authenticated roster: only active sessions with a recent browser heartbeat."""
         now=dt.datetime.now(dt.timezone.utc)
-        rows=db.execute('''SELECT DISTINCT u.id,u.name,u.role FROM users u
-          JOIN prank_presence p ON p.user_id=u.id JOIN sessions s ON s.token_hash=p.session_hash
+        rows=db.execute('''SELECT DISTINCT u.id,u.name,u.role,
+          COALESCE(a.revision,0) avatar_revision,COALESCE(a.image_url,'') avatar_url,
+          CASE WHEN a.image_b64<>'' THEN 1 ELSE 0 END avatar_stored
+          FROM users u JOIN prank_presence p ON p.user_id=u.id
+          JOIN sessions s ON s.token_hash=p.session_hash
+          LEFT JOIN user_avatars a ON a.user_id=u.id
           WHERE u.active=1 AND p.last_seen>=? AND s.expires_at>?
           ORDER BY CASE WHEN u.role='admin' THEN 0 ELSE 1 END,u.name''',
           ((now-dt.timedelta(seconds=15)).isoformat(),now.isoformat())).fetchall()
@@ -616,7 +630,11 @@ class Handler(BaseHTTPRequestHandler):
     def bootstrap(self,db,user,q):
         month=q.get('month',[TODAY().strftime('%Y-%m')])[0]; first,last=month_range(month)
         admin=user['role']=='admin'
-        users=json_rows(db.execute('SELECT id,name,username,role,is_staff,active,created_at FROM users WHERE is_staff=1 ORDER BY active DESC,name').fetchall()) if admin else [dict(user)]
+        users=json_rows(db.execute('''SELECT u.id,u.name,u.username,u.role,u.is_staff,u.active,u.created_at,
+            COALESCE(a.revision,0) avatar_revision,COALESCE(a.image_url,'') avatar_url,
+            CASE WHEN a.image_b64<>'' THEN 1 ELSE 0 END avatar_stored
+            FROM users u LEFT JOIN user_avatars a ON a.user_id=u.id
+            WHERE u.is_staff=1 ORDER BY u.active DESC,u.name''').fetchall()) if admin else [dict(user)]
         tasks=json_rows(db.execute('SELECT id,title,unit,norm,category,active FROM tasks ORDER BY active DESC,id').fetchall())
         eargs=[first,last]; aargs=[first,last]
         efilter=''; afilter=''

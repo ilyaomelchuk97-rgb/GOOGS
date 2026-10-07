@@ -441,3 +441,60 @@ body.menu-open{overflow:hidden}
 .ornament-flower-20{--sz:31px;--spin:-80deg;--hue:-30deg;--flip:1;--opa:0.80}
 .ornament-branch-20{--sz:44px;--spin:-30deg;--hue:50deg;--flip:1;--opa:0.79}
 .ornament-logo-20{--sz:30px;--spin:-11deg;background:linear-gradient(20deg,hsl(220 49% 24%),hsl(298 53% 38%));border-radius:7px}
+
+/* Просмотр фотографий поверх страницы, независимо от страницы чата. */
+.avatar-view-trigger{border:0;padding:0;cursor:zoom-in;font:inherit;display:grid;place-items:center}
+.avatar-view-trigger:hover,.avatar-view-trigger:focus-visible{outline:3px solid #20aa8a;outline-offset:2px}
+.topbar .avatar-view-trigger{font-size:16px}
+.side-user .avatar-view-trigger{background:#285363;color:#b9f1df;padding:0}
+.presence-person .avatar-view-trigger{padding:0}
+.chat-room-person .chat-room-open{flex:1;min-width:0;display:block;padding:0;border:0;background:none;color:inherit;text-align:left;cursor:pointer;font:inherit}
+.chat-room-person .chat-room-open:focus-visible{outline:2px solid #17a888;outline-offset:3px;border-radius:5px}
+.chat-room-person .chat-room-open .chat-room-meta{display:block;min-width:0}
+.chat-room-person .chat-room-avatar{padding:0}
+.avatar-lightbox-backdrop{position:fixed;inset:0;z-index:110;display:grid;place-items:center;padding:18px;background:rgba(11,29,43,.83);backdrop-filter:blur(7px)}
+.avatar-lightbox{position:relative;width:min(100%,475px);max-height:calc(100dvh - 36px);overflow:auto;border-radius:22px;background:#fff;padding:54px 26px 28px;text-align:center;box-shadow:0 30px 95px rgba(0,0,0,.36);color:#243e4d}
+.avatar-lightbox-close{position:absolute;top:13px;right:14px;width:37px;height:37px;border:0;border-radius:11px;background:#eef4f2;color:#365b62;display:grid;place-items:center;cursor:pointer}
+.avatar-lightbox-close:hover,.avatar-lightbox-close:focus-visible{background:#d8f2e7;outline:2px solid #19a888}
+.avatar-lightbox-photo{position:relative;overflow:hidden;width:min(100%,355px);aspect-ratio:1;margin:0 auto 19px;border-radius:18px;background:linear-gradient(135deg,#e7f7ef,#d8eaf5);color:#1e8e7e;box-shadow:inset 0 0 0 1px #d9e9e5;font-weight:800;font-size:clamp(70px,13vw,120px)}
+.avatar-lightbox-photo .avatar-photo{object-fit:contain}
+.avatar-lightbox h2{font-size:20px;line-height:1.35;overflow-wrap:anywhere}
+.avatar-lightbox-caption{color:#708895;font-size:14px;margin-top:7px}
+.avatar-lightbox-edit{margin-top:19px}
+@media(max-width:480px){.avatar-lightbox{padding:53px 18px 24px}.avatar-lightbox-photo{width:min(100%,300px)}}
+
+/* Прозрачность двух цветов и шесть новых вариантов спецэффектов границы. */
+.chat-style-controls .chat-alpha-control{min-width:0}
+.chat-alpha-row{display:flex;align-items:center;gap:8px}
+.chat-alpha-row input[type="range"]{flex:1;min-width:50px;height:28px;margin:0;accent-color:#159d86;cursor:pointer}
+.chat-alpha-swatch{flex:none;display:block;width:31px;height:29px;border:1px solid #96a7a6;border-radius:7px;background:linear-gradient(var(--swatch),var(--swatch)),conic-gradient(#d1d9d9 25%,#fff 0 50%,#d1d9d9 0 75%,#fff 0) 0 0/12px 12px}
+.chat-style-controls output{font-variant-numeric:tabular-nums;color:#267f72}
+.chat-frame-decor{overflow:visible}
+.chat-painted.effect-21{border:2px solid var(--effect-color);outline:1px dashed #54ad75;outline-offset:2px}
+.chat-painted.effect-22{border:3px solid transparent;background:linear-gradient(var(--bubble-bg),var(--bubble-bg)) padding-box,linear-gradient(90deg,var(--effect-color),#f7eea8,#9ce7e5,var(--effect-color)) border-box;background-size:100% 100%,260% 260%;animation:chat-shimmer 5s linear infinite}
+.chat-painted.effect-23{border:3px dotted var(--effect-color);box-shadow:inset 0 0 0 2px #f9e7a450}
+.chat-painted.effect-24{border:3px solid transparent;background:linear-gradient(var(--bubble-bg),var(--bubble-bg)) padding-box,repeating-linear-gradient(125deg,var(--effect-color) 0 4px,#ffffff 5px 8px,#9ee6f0 9px 13px) border-box}
+.chat-painted.effect-25{border-top:3px dashed var(--effect-color);border-right:3px double #82cbdc;border-bottom:3px dashed var(--effect-color);border-left:3px double #82cbdc}
+.chat-painted.effect-26{border:4px solid transparent;background:linear-gradient(var(--bubble-bg),var(--bubble-bg)) padding-box,conic-gradient(from 30deg,var(--effect-color),#7cedc6,#90c8fa,#d3a6ee,#ffe6a4,var(--effect-color)) border-box;background-size:100% 100%,230% 230%;animation:chat-shimmer 7s ease-in-out infinite}
+/* Separate AI-generated transparent illustrations travel around the entire perimeter.
+   JS measures the rendered box and keeps the sprite centered on a message edge. */
+.chat-edge-runner{--edge-width:120px;--edge-height:60px;position:absolute;left:-13px;top:-13px;width:26px;height:26px;z-index:6;pointer-events:none;animation:chat-edge-lap 8s linear infinite;will-change:transform}
+.chat-edge-runner img{display:block;width:100%;height:100%;object-fit:contain;user-select:none;filter:drop-shadow(0 1px 3px #163b5180)}
+.chat-edge-runner.runner-21{width:min(86px,70%);height:31px;animation-duration:10s}
+.chat-edge-runner.runner-22{width:min(78px,70%);height:25px;animation-duration:5.5s}
+.chat-edge-runner.runner-23{width:34px;height:33px;animation-duration:9s}
+.chat-edge-runner.runner-24{width:26px;height:38px;animation-duration:4s}
+.chat-edge-runner.runner-25{width:43px;height:24px;animation-duration:7s}
+.chat-edge-runner.runner-26{width:min(66px,70%);height:27px;animation-duration:11s}
+@keyframes chat-edge-lap{
+  0%{transform:translate(0,0) rotate(0deg)}
+  24%{transform:translate(var(--edge-width),0) rotate(0deg)}
+  25%{transform:translate(var(--edge-width),0) rotate(90deg)}
+  49%{transform:translate(var(--edge-width),var(--edge-height)) rotate(90deg)}
+  50%{transform:translate(var(--edge-width),var(--edge-height)) rotate(180deg)}
+  74%{transform:translate(0,var(--edge-height)) rotate(180deg)}
+  75%{transform:translate(0,var(--edge-height)) rotate(270deg)}
+  99%{transform:translate(0,0) rotate(270deg)}
+  100%{transform:translate(0,0) rotate(360deg)}
+}
+.chat-frame-decor .chat-edge-runner{left:0;top:0}

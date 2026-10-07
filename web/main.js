@@ -12,13 +12,22 @@ function logDate(d){if(!d)return '';return new Date(d.replace(' ','T')+'Z').toLo
 function dayTime(d){if(!d)return '';const date=new Date(d.replace(' ','T')+'Z');return logDate(d)+' · '+date.toLocaleTimeString('ru-RU',{timeZone:'Europe/Minsk',hour:'2-digit',minute:'2-digit'})}
 function dateShift(date,days){let d=new Date(date+'T12:00:00');d.setDate(d.getDate()+days);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 function dayType(day){const d=new Date(day+'T12:00:00').getDay();return d!==0&&d!==6}
-const S={user:null,data:null,month:null,today:null,page:'overview',report:null,logs:null,search:'',userFilter:'',categoryFilter:'',menuOpen:false,modal:null,attendanceChoice:'absent',prankOnline:[],prankTarget:null,presencePeople:[],presenceOnline:false,presenceOpen:false,backupStatus:null,backupPreview:null,backupFile:null,chatRoom:'general',chatData:null,messageStyle:{},roomDraft:null,chatDesignOpen:null,unread:{direct:{},general:0}};
+const S={user:null,data:null,month:null,today:null,page:'overview',report:null,logs:null,search:'',userFilter:'',categoryFilter:'',menuOpen:false,modal:null,attendanceChoice:'absent',prankOnline:[],prankTarget:null,presencePeople:[],presenceOnline:false,presenceOpen:false,backupStatus:null,backupPreview:null,backupFile:null,chatRoom:'general',chatData:null,messageStyle:{},roomDraft:null,chatDesignOpen:null,avatarPreview:null,avatarPreviewFocus:null,unread:{direct:{},general:0}};
 const avatarCache=new Map();let chatStatusCursor=null,chatStatusBusy=false;
 function avatarHTML(person){
  const name=esc(initials(person?.name)),url=person?.avatar_url;
  if(url&&/^https:\/\//i.test(url))return `<span class="avatar-initials">${name}</span><img class="avatar-photo" src="${esc(url)}" alt="" referrerpolicy="no-referrer" loading="lazy">`;
  if(person?.avatar_stored&&person?.id)return `<span class="avatar-initials">${name}</span><img class="avatar-photo" data-avatar-id="${Number(person.id)}" data-avatar-revision="${Number(person.avatar_revision)||0}" alt="" hidden>`;
  return `<span class="avatar-initials">${name}</span>`;
+}
+function avatarButton(person,classes='avatar',title='Открыть фото профиля'){
+ const id=Number(person?.id),url=person?.avatar_url||'';
+ if(!Number.isSafeInteger(id)||id<1)return `<span class="${esc(classes)}">${avatarHTML(person)}</span>`;
+ return `<button type="button" class="${esc(classes)} avatar-view-trigger" data-action="avatar-preview"
+   data-avatar-id="${id}" data-avatar-name="${esc(person.name)}"
+   data-avatar-url="${esc(url)}" data-avatar-stored="${person.avatar_stored?1:0}"
+   data-avatar-revision="${Number(person.avatar_revision)||0}"
+   title="${esc(title)}: ${esc(person.name)}" aria-label="${esc(title)}: ${esc(person.name)}">${avatarHTML(person)}</button>`;
 }
 function clearAvatarCache(){for(const item of avatarCache.values())if(item.url)URL.revokeObjectURL(item.url);avatarCache.clear()}
 async function avatarObjectUrl(uid,revision){
@@ -39,6 +48,8 @@ async function avatarObjectUrl(uid,revision){
 }
 function hydrateAvatars(){
  document.querySelectorAll('.avatar-photo').forEach(img=>{
+  if(img.dataset.avatarHydrated==='1')return;
+  img.dataset.avatarHydrated='1';
   img.addEventListener('error',()=>{img.hidden=true},{once:true});
   if(!img.dataset.avatarId)return;
   const uid=Number(img.dataset.avatarId),revision=Number(img.dataset.avatarRevision);
@@ -47,12 +58,45 @@ function hydrateAvatars(){
   }).catch(()=>{img.hidden=true});
  });
 }
+function closeAvatarPreview(restoreFocus=true){
+ const previous=S.avatarPreviewFocus;
+ S.avatarPreview=null;S.avatarPreviewFocus=null;
+ $('#avatar-viewer-root')?.replaceChildren();
+ if(restoreFocus&&previous?.isConnected)previous.focus({preventScroll:true});
+}
+function openAvatarPreview(trigger){
+ if(!S.user)return;
+ const id=Number(trigger.dataset.avatarId);
+ if(!Number.isSafeInteger(id)||id<1)return;
+ const known=id===S.user.id?S.user:
+  S.chatData?.users?.find(u=>u.id===id)||S.presencePeople.find(u=>u.id===id)||S.data?.users?.find(u=>u.id===id);
+ // On a chat message the sender can be absent from today's active-user list.
+ const person=known||{id,name:trigger.dataset.avatarName,
+  avatar_url:trigger.dataset.avatarUrl,avatar_stored:trigger.dataset.avatarStored==='1',
+  avatar_revision:Number(trigger.dataset.avatarRevision)||0};
+ S.avatarPreview={...person,id};S.avatarPreviewFocus=trigger;
+ renderAvatarPreview();
+}
+function renderAvatarPreview(){
+ const root=$('#avatar-viewer-root'),person=S.avatarPreview;if(!root||!person)return;
+ const own=person.id===S.user?.id,hasPhoto=Boolean(person.avatar_stored||person.avatar_url);
+ root.innerHTML=`<div class="avatar-lightbox-backdrop" data-action="avatar-preview-close">
+  <section class="avatar-lightbox" role="dialog" aria-modal="true" aria-label="Фото профиля: ${esc(person.name)}">
+   <button type="button" class="avatar-lightbox-close" data-action="avatar-preview-close" aria-label="Закрыть просмотр фото">${ic('x')}</button>
+   <div class="avatar-lightbox-photo">${avatarHTML(person)}</div>
+   <h2>${esc(person.name)}</h2><p class="avatar-lightbox-caption">${hasPhoto?'Фото профиля':'Фото профиля пока не загружено'}</p>
+   ${own?`<button type="button" class="btn primary avatar-lightbox-edit" data-action="avatar-preview-edit">${ic('edit')} ${hasPhoto?'Изменить фото':'Загрузить фото'}</button>`:''}
+  </section></div>`;
+ const photo=root.querySelector('.avatar-lightbox-photo img');
+ photo?.addEventListener('error',()=>{root.querySelector('.avatar-lightbox-caption').textContent='Не удалось загрузить фото'});
+ hydrateAvatars();root.querySelector('.avatar-lightbox-close')?.focus();
+}
 function unreadCount(room){return room==='general'?Number(S.unread.general||0):room==='all'?
  Number(S.unread.general||0)+Object.values(S.unread.direct||{}).reduce((sum,n)=>sum+Number(n),0):
  Number(S.unread.direct?.[room]||0)}
 function unreadBadge(room){const n=unreadCount(room);return `<span class="chat-unread" data-unread-room="${esc(room)}" ${n?'':'hidden'}>${n>99?'99+':n}</span>`}
 function updateUnreadUI(){document.querySelectorAll('[data-unread-room]').forEach(badge=>{const n=unreadCount(badge.dataset.unreadRoom);badge.hidden=!n;badge.textContent=n>99?'99+':String(n)})}
-// Safe, fixed catalogue: 20 effects + 20 flowers + 20 branches + 20 logo frames.
+// Safe catalogue: 26 border effects, 20 flowers, 20 branches, 20 logo frames.
 const CHAT_STYLE_CATEGORIES={
  border_effect:'Эффект рамки',flower:'Цветы',branch:'Ветви',logo:'Значок «УП МИНГАЗ»'
 };
@@ -60,39 +104,59 @@ const CHAT_STYLE_NAMES={border_effect:[
  'Нежный контур','Пунктир','Двойной ободок','Розовые искры','Изумрудная линия',
  'Лунное свечение','Радужная кромка','Золотая нить','Полярное сияние','Мерцающие точки',
  'Волшебная рамка','Ледяная грань','Солнечный ореол','Сиреневая дымка','Бирюзовые огни',
- 'Штриховая рамка','Праздничный кант','Звёздный контур','Весенний отблеск','Северное сияние'
+ 'Штриховая рамка','Праздничный кант','Звёздный контур','Весенний отблеск','Северное сияние',
+ 'Змейка по контуру','Хвост кометы','Светлячки','Электрические искры','Бегущие капли','Северный вихрь'
 ]};
 function normalizedStyle(raw){
  const s=raw&&typeof raw==='object'&&!Array.isArray(raw)?raw:{},v={};
  for(const key of ['bubble','glow_color'])if(/^#[0-9a-f]{6}$/i.test(s[key]))v[key]=s[key];
  if(typeof s.glow==='boolean')v.glow=s.glow;
- for(const key of Object.keys(CHAT_STYLE_CATEGORIES))if(Number.isInteger(s[key])&&s[key]>=0&&s[key]<=20)v[key]=s[key];
+ for(const key of ['bubble_alpha','glow_alpha'])if(Number.isInteger(s[key])&&s[key]>=0&&s[key]<=100)v[key]=s[key];
+ for(const key of Object.keys(CHAT_STYLE_CATEGORIES))if(Number.isInteger(s[key])&&s[key]>=0&&s[key]<=(key==='border_effect'?26:20))v[key]=s[key];
  return v;
 }
-function colorInk(hex){const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);return (.2126*r+.7152*g+.0722*b)<138?'#fff':'#203d4b'}
+function rgbaColor(hex,alpha=100){const rgb=[1,3,5].map(i=>parseInt(hex.slice(i,i+2),16));return `rgba(${rgb.join(',')},${(alpha/100).toFixed(2)})`}
+function colorInk(hex,alpha=100){if(alpha<70)return '#203d4b';const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);return (.2126*r+.7152*g+.0722*b)<138?'#fff':'#203d4b'}
 function chatPaint(raw,frame=false){
  const s=normalizedStyle(raw),color=s.bubble||'#e0f5e9',accent=s.glow_color||'#c5659f';
- const css=`--bubble-bg:${color};--bubble-ink:${colorInk(color)};--effect-color:${accent};--glow-color:${accent}`;
+ const css=`--bubble-bg:${rgbaColor(color,s.bubble_alpha??100)};--bubble-ink:${colorInk(color,s.bubble_alpha??100)};--effect-color:${rgbaColor(accent,s.glow_alpha??100)};--glow-color:${rgbaColor(accent,s.glow_alpha??100)}`;
  return {style:css,classes:`${Object.keys(s).length?'chat-painted':''} effect-${s.border_effect||0} ${s.glow?'glow-on':''}`};
 }
 function chatDecor(raw,frame=false){
  const s=normalizedStyle(raw);
- return ['flower','branch','logo'].map(kind=>{
+ const ornaments=['flower','branch','logo'].map(kind=>{
   const variant=s[kind]||0;if(!variant)return '';
   const src={flower:'/chat-flower.png',branch:'/chat-branch.png',logo:'/mingas-official-logo.webp'}[kind];
   return `<span class="chat-ornament ornament-${kind} ornament-${kind}-${variant} ${frame?'frame-ornament':''}" aria-hidden="true"><img src="${src}" alt="" loading="lazy"></span>`;
  }).join('');
+ const effect=s.border_effect||0;
+ if(effect<21||effect>26)return ornaments;
+ const image={21:'snake',22:'comet',23:'firefly',24:'electric',25:'rain',26:'aurora'}[effect];
+ return ornaments+`<span class="chat-edge-runner runner-${effect}" aria-hidden="true"><img src="/effect-${image}.png?v=20261007-37" alt="" draggable="false"></span>`;
+}
+function updateEdgeRunners(){
+ document.querySelectorAll('.chat-edge-runner').forEach(runner=>{
+  const box=runner.parentElement;
+  if(box){const inset=box.classList.contains('chat-frame-decor');
+   runner.style.setProperty('--edge-width',Math.max(0,box.clientWidth-(inset?runner.offsetWidth:0))+'px');
+   runner.style.setProperty('--edge-height',Math.max(0,box.clientHeight-(inset?runner.offsetHeight:0))+'px');
+   runner.style.left=inset?'0px':-runner.offsetWidth/2+'px';
+   runner.style.top=inset?'0px':-runner.offsetHeight/2+'px'}
+ });
 }
 function chatEditorHTML(target){
  const draft=normalizedStyle(target==='room'?(S.roomDraft??S.chatData?.theme):S.messageStyle);
  const label=target==='room'?'Рамка этой беседы · видна всем участникам':'Оформление новых сообщений · видно получателям';
- const select=(key,title)=>`<label>${title}<select data-style-field="${key}">${Array.from({length:21},(_,v)=>`<option value="${v}" ${Number(draft[key]||0)===v?'selected':''}>${v===0?'Выключено':`${v}. ${key==='border_effect'?CHAT_STYLE_NAMES.border_effect[v-1]:'Вариант '+v}`}</option>`).join('')}</select></label>`;
+ const select=(key,title)=>`<label>${title}<select data-style-field="${key}">${Array.from({length:key==='border_effect'?27:21},(_,v)=>`<option value="${v}" ${Number(draft[key]||0)===v?'selected':''}>${v===0?'Выключено':`${v}. ${key==='border_effect'?CHAT_STYLE_NAMES.border_effect[v-1]:'Вариант '+v}`}</option>`).join('')}</select></label>`;
+ const alphaControl=(key,title,color)=>{const value=draft[key]??100;return `<label class="chat-alpha-control"><span>${title}: <output data-alpha-output="${key}">${value}%</output></span><span class="chat-alpha-row"><input type="range" min="0" max="100" step="1" value="${value}" data-style-field="${key}" aria-label="${title}"><i class="chat-alpha-swatch" data-alpha-swatch="${key}" style="--swatch:${rgbaColor(color,value)}" aria-hidden="true"></i></span></label>`};
  const preview=target==='room'?'Так будет выглядеть рамка переписки':'Так будет выглядеть новое сообщение';
  const painted=chatPaint(draft,target==='room');
- return `<div class="chat-style-title"><b>${esc(label)}</b><span>20 вариантов в каждой категории</span></div>
+ return `<div class="chat-style-title"><b>${esc(label)}</b><span>26 эффектов рамки · по 20 украшений</span></div>
  <div class="chat-style-controls"><label>Цвет облачка / фона<input type="color" data-style-field="bubble" value="${draft.bubble||'#e0f5e9'}"></label>
+ ${alphaControl('bubble_alpha','Непрозрачность облачка',draft.bubble||'#e0f5e9')}
  <label class="chat-glow-check"><input type="checkbox" data-style-field="glow" ${draft.glow?'checked':''}> Включить подсветку</label>
  <label>Цвет подсветки и рамки<input type="color" data-style-field="glow_color" value="${draft.glow_color||'#c5659f'}"></label>
+ ${alphaControl('glow_alpha','Непрозрачность подсветки',draft.glow_color||'#c5659f')}
  ${Object.entries(CHAT_STYLE_CATEGORIES).map(([key,title])=>select(key,title)).join('')}</div>
  <div class="chat-style-preview ${painted.classes}" style="${painted.style}"><span>${preview}</span>${chatDecor(draft,target==='room')}</div>
  <div class="chat-style-actions"><button type="button" class="btn secondary" data-action="chat-style-reset">Сбросить оформление</button>${target==='room'?'<button type="button" class="btn primary" data-action="chat-style-save-room">Показать всем участникам</button>':'<small>Применится при отправке следующего сообщения.</small>'}</div>`;
@@ -104,14 +168,42 @@ function toggleChatEditor(target){
  S.chatDesignOpen=target;
  if(target==='room')S.roomDraft={...normalizedStyle(S.chatData?.theme)};
  $('#chat-form')?.insertAdjacentHTML('beforebegin',`<div class="chat-style-editor" id="chat-style-editor">${chatEditorHTML(target)}</div>`);
+ updateEdgeRunners();
 }
-function refreshChatEditor(){const editor=$('#chat-style-editor');if(editor&&S.chatDesignOpen)editor.innerHTML=chatEditorHTML(S.chatDesignOpen)}
+function refreshChatEditor(){const editor=$('#chat-style-editor');if(editor&&S.chatDesignOpen){editor.innerHTML=chatEditorHTML(S.chatDesignOpen);updateEdgeRunners()}}
+function setChatStyleField(input){
+ if(!S.chatDesignOpen||!input.dataset.styleField)return;
+ const key=input.dataset.styleField;
+ const value=key==='glow'?input.checked:
+   (key==='bubble_alpha'||key==='glow_alpha'||Object.hasOwn(CHAT_STYLE_CATEGORIES,key))?Number(input.value):input.value;
+ const draft={...normalizedStyle(S.chatDesignOpen==='room'?S.roomDraft:S.messageStyle),[key]:value};
+ if(S.chatDesignOpen==='room')S.roomDraft=draft;else S.messageStyle=draft;
+ const preview=$('.chat-style-preview');if(preview){
+  const painted=chatPaint(draft,S.chatDesignOpen==='room');
+  preview.className='chat-style-preview '+painted.classes;preview.style.cssText=painted.style;
+  if(Object.hasOwn(CHAT_STYLE_CATEGORIES,key)){
+   const caption=S.chatDesignOpen==='room'?'Так будет выглядеть рамка переписки':'Так будет выглядеть новое сообщение';
+   preview.innerHTML=`<span>${caption}</span>${chatDecor(draft,S.chatDesignOpen==='room')}`;
+   updateEdgeRunners();
+  }
+ }
+ if(key==='bubble_alpha'||key==='glow_alpha'){
+  const output=document.querySelector(`[data-alpha-output="${key}"]`);if(output)output.textContent=value+'%';
+  const swatch=document.querySelector(`[data-alpha-swatch="${key}"]`);
+  if(swatch)swatch.style.setProperty('--swatch',rgbaColor(key==='bubble_alpha'?(draft.bubble||'#e0f5e9'):(draft.glow_color||'#c5659f'),value));
+ }
+}
 function applyRoomTheme(){
  const card=$('.chat-layout');if(!card||!S.chatData)return;
- const paint=chatPaint(S.chatData.theme,true);
- card.className='chat-layout card '+paint.classes;
- card.style.cssText=paint.style;
- const decorations=$('#chat-frame-decor');if(decorations)decorations.innerHTML=chatDecor(S.chatData.theme,true);
+ const paint=chatPaint(S.chatData.theme,true),themeSignature=JSON.stringify(normalizedStyle(S.chatData.theme));
+ if(card.dataset.themeSignature!==themeSignature){
+  card.className='chat-layout card '+paint.classes;card.style.cssText=paint.style;
+  card.dataset.themeSignature=themeSignature;
+ }
+ const decorations=$('#chat-frame-decor');
+ if(decorations){const theme=normalizedStyle(S.chatData.theme),signature=['flower','branch','logo','border_effect'].map(k=>theme[k]||0).join(':');
+  if(decorations.dataset.signature!==signature){decorations.innerHTML=chatDecor(theme,true);decorations.dataset.signature=signature}}
+ updateEdgeRunners();
 }
 function resetChatSession(){chatStatusCursor=null;chatStatusBusy=false;S.unread={direct:{},general:0};S.messageStyle={};S.roomDraft=null;S.chatDesignOpen=null;clearAvatarCache()}
 let authToken='',tokenInUrl=false;
@@ -137,11 +229,11 @@ function notify(message,error=false){const box=document.createElement('div');box
 async function init(){try{let session=await api('/api/session');if(!session.user&&authToken&&!tokenInUrl){tokenInUrl=true;session=await api('/api/session');if(!session.user)setToken('')}S.today=session.today;S.user=session.user;S.month=session.today.slice(0,7);if(S.user){await load();startPrankPolling()}else showLogin()}catch(e){showLogin();notify(e.message,true)}}
 async function load(){S.data=await api('/api/bootstrap?month='+S.month);S.user=S.data.user;S.today=S.data.today;if(S.page==='report'&&isAdmin())S.report=await api('/api/report?month='+S.month);if(S.page==='activity'&&isAdmin())S.logs=await api('/api/logs');if(S.page==='backup'&&isAdmin())S.backupStatus=await api('/api/backup/status');if(S.page==='chat')await fetchChat(true);render()}
 function isAdmin(){return S.user?.role==='admin'}
-function showLogin(){S.user=null;S.menuOpen=false;document.body.classList.remove('menu-open');$('#app').innerHTML=`<div class="login-screen"><div class="login-art"><div class="quote"><div class="hero-kicker login-kicker"><span class="login-pulse-dot" aria-hidden="true"></span>Пространство вашей команды</div><h1>Каждый день —<br><em>результат.</em></h1><p>Отмечайте выполненную работу, следите за графиком и собирайте отчётность без бесконечных таблиц.</p><div class="login-preview">${[31,54,43,72,61,85,64,105,94,127,109,136].map((h,i)=>`<i style="height:${h}px;opacity:${.35+i*.052}"></i>`).join('')}</div></div></div><div class="login-panel"><form id="login-form" class="login-box"><span class="pill">◉ &nbsp;Добро пожаловать</span><h2>Рады вас видеть!</h2><p>Войдите в личный кабинет, чтобы продолжить работу с командой.</p><div class="field"><label for="login-username">Логин</label><input id="login-username" name="username" placeholder="Ваш логин" autocomplete="username" required autofocus></div><div class="field"><label for="login-password">Пароль</label><input id="login-password" name="password" type="password" placeholder="Введите пароль" autocomplete="current-password" required></div><div class="form-error" id="login-error"></div><button type="submit" class="btn primary">Войти в систему ${ic('arrow')}</button><div class="login-foot">Для входа администратора: логин <b>admin</b>, пароль <b>admin</b>. Данные сотрудников — в файле <b>initial_credentials.txt</b>.</div></form></div></div>`}
+function showLogin(){closeAvatarPreview(false);S.user=null;S.menuOpen=false;document.body.classList.remove('menu-open');$('#app').innerHTML=`<div class="login-screen"><div class="login-art"><div class="quote"><div class="hero-kicker login-kicker"><span class="login-pulse-dot" aria-hidden="true"></span>Пространство вашей команды</div><h1>Каждый день —<br><em>результат.</em></h1><p>Отмечайте выполненную работу, следите за графиком и собирайте отчётность без бесконечных таблиц.</p><div class="login-preview">${[31,54,43,72,61,85,64,105,94,127,109,136].map((h,i)=>`<i style="height:${h}px;opacity:${.35+i*.052}"></i>`).join('')}</div></div></div><div class="login-panel"><form id="login-form" class="login-box"><span class="pill">◉ &nbsp;Добро пожаловать</span><h2>Рады вас видеть!</h2><p>Войдите в личный кабинет, чтобы продолжить работу с командой.</p><div class="field"><label for="login-username">Логин</label><input id="login-username" name="username" placeholder="Ваш логин" autocomplete="username" required autofocus></div><div class="field"><label for="login-password">Пароль</label><input id="login-password" name="password" type="password" placeholder="Введите пароль" autocomplete="current-password" required></div><div class="form-error" id="login-error"></div><button type="submit" class="btn primary">Войти в систему ${ic('arrow')}</button><div class="login-foot">Для входа администратора: логин <b>admin</b>, пароль <b>admin</b>. Данные сотрудников — в файле <b>initial_credentials.txt</b>.</div></form></div></div>`}
 const NAV=[['overview','Обзор','grid'],['chat','Чат','message'],['entries','Мои работы','clipboard'],['report','Сводный отчёт','chart'],['attendance','Табель','calendar'],['team','Сотрудники','users'],['catalog','Каталог работ','layers'],['activity','Журнал действий','history'],['backup','Резервные копии','download'],['prank','Прикол','party']];
 function presenceListHTML(){
  const people=S.presencePeople;
- return `<div class="presence-popover-head"><b>Сейчас в сети</b><span>${people.length}</span></div><div class="presence-people">${people.map(u=>`<div class="presence-person"><div class="avatar">${esc(initials(u.name))}</div><span class="presence-person-name">${esc(u.name)}${u.id===S.user?.id?'<small>Вы</small>':''}${u.role==='admin'&&u.name.toLowerCase()!=='администратор'?'<small>Администратор</small>':''}</span><span class="presence-person-dot" aria-label="В сети"></span></div>`).join('')}</div>`;
+ return `<div class="presence-popover-head"><b>Сейчас в сети</b><span>${people.length}</span></div><div class="presence-people">${people.map(u=>`<div class="presence-person">${avatarButton(u,'avatar')}<span class="presence-person-name">${esc(u.name)}${u.id===S.user?.id?'<small>Вы</small>':''}${u.role==='admin'&&u.name.toLowerCase()!=='администратор'?'<small>Администратор</small>':''}</span><span class="presence-person-dot" aria-label="В сети"></span></div>`).join('')}</div>`;
 }
 function presenceHTML(){
  const active=S.presenceOnline,open=active&&S.presenceOpen;
@@ -156,7 +248,7 @@ function updatePresenceWidget(){
  button.querySelector('.presence-label').textContent=active?'В сети · '+S.presencePeople.length:'Не в сети';
  const arrow=button.querySelector('svg');if(arrow&&!active)arrow.remove();
  else if(!arrow&&active)button.insertAdjacentHTML('beforeend',ic('chevRight'));
- popover.hidden=!open;if(open)popover.innerHTML=presenceListHTML();
+ popover.hidden=!open;if(open){popover.innerHTML=presenceListHTML();hydrateAvatars()}
 }
 function setPresenceOffline(){S.presenceOnline=false;S.presencePeople=[];S.presenceOpen=false;updatePresenceWidget()}
 async function refreshPresence(){
@@ -167,7 +259,7 @@ async function refreshPresence(){
  presenceSeen=Date.now();updatePresenceWidget();
 }
 function navList(){return NAV.filter(([id])=>isAdmin()||!['report','team','catalog','activity','backup','prank'].includes(id)).map(([id,label,icon])=>`<button class="nav-link ${S.page===id?'active':''}" data-nav="${id}">${ic(icon)}<span>${label}</span>${id==='chat'?unreadBadge('all'):''}</button>`).join('')}
-function render(){if(!S.user)return showLogin();document.body.classList.toggle('menu-open',S.menuOpen);const label=NAV.find(n=>n[0]===S.page)?.[1]||'Обзор';$('#app').innerHTML=`<div class="layout"><div id="sidebar-backdrop" class="sidebar-backdrop ${S.menuOpen?'show':''}" data-action="close-menu" aria-hidden="true"></div><aside id="app-sidebar" class="sidebar ${S.menuOpen?'open':''}" aria-label="Навигация по разделам" aria-hidden="${!S.menuOpen}" ${S.menuOpen?'':'inert'}><div class="side-top"><div class="side-title">Отчёт по работе <span>ГООГС СЭОГС</span></div><button class="sidebar-close icon-btn" type="button" data-action="close-menu" title="Закрыть меню" aria-label="Закрыть меню">${ic('x')}</button></div><div class="side-section">Рабочее пространство</div><nav class="nav">${navList()}</nav><div class="side-bottom"><div class="side-note"><div class="note-icon">${ic('sparkle')}</div><b>Всё под контролем</b><p>Работы, табель и отчёты — в одном удобном пространстве команды.</p></div><div class="side-user"><div class="avatar">${esc(initials(S.user.name))}</div><div class="meta"><b>${esc(S.user.name)}</b><small>${isAdmin()?'Администратор':'Сотрудник'}</small></div><button title="Выйти" data-action="logout">${ic('logout')}</button></div></div></aside><main class="main"><header class="topbar"><button id="menu-toggle" class="icon-btn mobile-menu" type="button" data-action="menu" title="Открыть меню" aria-label="Открыть меню" aria-controls="app-sidebar" aria-expanded="${S.menuOpen}">${ic('menu')}</button><div class="breadcrumbs">Рабочее пространство <span>/</span> <span>${esc(label)}</span></div>${presenceHTML()}<div class="topbar-right"><span class="top-date">${ic('calendar')} ${new Date(S.today+'T12:00:00').toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric'})}</span><div class="top-divider"></div>${isAdmin()?`<button class="icon-btn" data-modal="password" title="Сменить пароль">${ic('lock')}</button>`:''}<button type="button" class="avatar avatar-edit-trigger" data-modal="avatar" title="Установить или изменить аватар" aria-label="Изменить мой аватар">${avatarHTML(S.user)}</button></div></header><div class="content">${pageHTML()}</div></main></div><div id="modal-root"></div>`;if(S.modal)renderModal();hydrateAvatars()}
+function render(){if(!S.user)return showLogin();document.body.classList.toggle('menu-open',S.menuOpen);const label=NAV.find(n=>n[0]===S.page)?.[1]||'Обзор';$('#app').innerHTML=`<div class="layout"><div id="sidebar-backdrop" class="sidebar-backdrop ${S.menuOpen?'show':''}" data-action="close-menu" aria-hidden="true"></div><aside id="app-sidebar" class="sidebar ${S.menuOpen?'open':''}" aria-label="Навигация по разделам" aria-hidden="${!S.menuOpen}" ${S.menuOpen?'':'inert'}><div class="side-top"><div class="side-title">Отчёт по работе <span>ГООГС СЭОГС</span></div><button class="sidebar-close icon-btn" type="button" data-action="close-menu" title="Закрыть меню" aria-label="Закрыть меню">${ic('x')}</button></div><div class="side-section">Рабочее пространство</div><nav class="nav">${navList()}</nav><div class="side-bottom"><div class="side-note"><div class="note-icon">${ic('sparkle')}</div><b>Всё под контролем</b><p>Работы, табель и отчёты — в одном удобном пространстве команды.</p></div><div class="side-user">${avatarButton(S.user,'avatar','Открыть моё фото профиля')}<div class="meta"><b>${esc(S.user.name)}</b><small>${isAdmin()?'Администратор':'Сотрудник'}</small></div><button title="Выйти" data-action="logout">${ic('logout')}</button></div></div></aside><main class="main"><header class="topbar"><button id="menu-toggle" class="icon-btn mobile-menu" type="button" data-action="menu" title="Открыть меню" aria-label="Открыть меню" aria-controls="app-sidebar" aria-expanded="${S.menuOpen}">${ic('menu')}</button><div class="breadcrumbs">Рабочее пространство <span>/</span> <span>${esc(label)}</span></div>${presenceHTML()}<div class="topbar-right"><span class="top-date">${ic('calendar')} ${new Date(S.today+'T12:00:00').toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric'})}</span><div class="top-divider"></div>${isAdmin()?`<button class="icon-btn" data-modal="password" title="Сменить пароль">${ic('lock')}</button>`:''}${avatarButton(S.user,'avatar avatar-edit-trigger','Открыть моё фото профиля')}</div></header><div class="content">${pageHTML()}</div></main></div><div id="modal-root"></div>`;if(S.modal)renderModal();hydrateAvatars();updateEdgeRunners()}
 function setMenuOpen(open){
  S.menuOpen=!!open;
  const sidebar=$('#app-sidebar'),backdrop=$('#sidebar-backdrop'),trigger=$('#menu-toggle');
@@ -265,11 +357,11 @@ let chatTimer=null,chatBusy=false;
 function chatRoomsHTML(){
  const people=S.chatData?.users||[];
  const group=`<button type="button" class="chat-room ${S.chatRoom==='general'?'selected':''}" data-action="chat-room" data-room="general"><span class="chat-room-avatar group">${ic('users')}</span><span class="chat-room-meta"><span class="chat-room-name"><b>Общий чат</b>${unreadBadge('general')}</span><small>Вся команда</small></span></button>`;
- return group+people.map(u=>`<button type="button" class="chat-room ${S.chatRoom===String(u.id)?'selected':''}" data-action="chat-room" data-room="${u.id}"><span class="chat-room-avatar">${avatarHTML(u)}</span><span class="chat-room-meta"><span class="chat-room-name"><b>${esc(u.name)}</b>${unreadBadge(String(u.id))}</span><small>${u.role==='admin'?'Администратор':'Сотрудник'}${S.presencePeople.some(p=>p.id===u.id)?' · в сети':''}</small></span></button>`).join('');
+ return group+people.map(u=>`<div class="chat-room chat-room-person ${S.chatRoom===String(u.id)?'selected':''}">${avatarButton(u,'chat-room-avatar','Открыть фото профиля')}<button type="button" class="chat-room-open" data-action="chat-room" data-room="${u.id}"><span class="chat-room-meta"><span class="chat-room-name"><b>${esc(u.name)}</b>${unreadBadge(String(u.id))}</span><small>${u.role==='admin'?'Администратор':'Сотрудник'}${S.presencePeople.some(p=>p.id===u.id)?' · в сети':''}</small></span></button></div>`).join('');
 }
 function chatMessagesHTML(){
  const messages=S.chatData?.messages||[];
- return messages.length?(S.chatData?.hasMore?'<button type="button" class="chat-load-older" data-action="chat-older">Показать более ранние сообщения</button>':'')+messages.map(m=>{const paint=chatPaint(m.style);return `<div class="chat-message-line ${m.sender_id===S.user.id?'own':''}"><span class="chat-room-avatar chat-message-avatar">${avatarHTML(m.sender_id===S.user.id?S.user:{id:m.sender_id,name:m.sender_name,avatar_revision:m.avatar_revision,avatar_url:m.avatar_url,avatar_stored:m.avatar_stored})}</span><div class="chat-bubble ${m.sender_id===S.user.id?'own':''} ${paint.classes}" style="${paint.style}"><b>${esc(m.sender_id===S.user.id?'Вы':m.sender_name)}</b><p>${esc(m.body)}</p><small>${esc(dayTime(m.created_at))}</small>${chatDecor(m.style)}</div></div>`}).join('')
+ return messages.length?(S.chatData?.hasMore?'<button type="button" class="chat-load-older" data-action="chat-older">Показать более ранние сообщения</button>':'')+messages.map(m=>{const paint=chatPaint(m.style);return `<div class="chat-message-line ${m.sender_id===S.user.id?'own':''}">${avatarButton(m.sender_id===S.user.id?S.user:{id:m.sender_id,name:m.sender_name,avatar_revision:m.avatar_revision,avatar_url:m.avatar_url,avatar_stored:m.avatar_stored},'chat-room-avatar chat-message-avatar')}<div class="chat-bubble ${m.sender_id===S.user.id?'own':''} ${paint.classes}" style="${paint.style}"><b>${esc(m.sender_id===S.user.id?'Вы':m.sender_name)}</b><p>${esc(m.body)}</p><small>${esc(dayTime(m.created_at))}</small>${chatDecor(m.style)}</div></div>`}).join('')
    :`<div class="chat-empty">${ic('message')}<b>Пока нет сообщений</b><span>Напишите первым — сообщение увидят участники этой беседы.</span></div>`;
 }
 function chatPage(){
@@ -278,7 +370,7 @@ function chatPage(){
  const paint=chatPaint(S.chatData?.theme,true);
  return `${head('ОБЩЕНИЕ','Чат','Личные переписки и общий чат команды. Сообщения сохраняются в базе.')}
   <div class="chat-layout card ${paint.classes}" style="${paint.style}"><div class="chat-frame-decor" id="chat-frame-decor" aria-hidden="true">${chatDecor(S.chatData?.theme,true)}</div><aside class="chat-rooms" aria-label="Беседы"><h2>Беседы</h2><div id="chat-rooms-list">${chatRoomsHTML()}</div></aside>
-  <section class="chat-panel" aria-label="${esc(title)}"><div class="chat-panel-head"><span class="chat-room-avatar ${S.chatRoom==='general'?'group':''}">${S.chatRoom==='general'?ic('users'):avatarHTML(person||{name:title})}</span><div class="chat-panel-head-label"><b>${esc(title)}</b><small>${S.chatRoom==='general'?'Сообщения видны всей команде':'Сообщения видны только вам двоим'}</small></div><button type="button" class="btn secondary chat-design-trigger" data-action="chat-design-room" title="Изменить рамку беседы для всех">✧ Рамка чата</button></div>
+  <section class="chat-panel" aria-label="${esc(title)}"><div class="chat-panel-head">${S.chatRoom==='general'?`<span class="chat-room-avatar group">${ic('users')}</span>`:avatarButton(person||{id:Number(S.chatRoom),name:title},'chat-room-avatar')}<div class="chat-panel-head-label"><b>${esc(title)}</b><small>${S.chatRoom==='general'?'Сообщения видны всей команде':'Сообщения видны только вам двоим'}</small></div><button type="button" class="btn secondary chat-design-trigger" data-action="chat-design-room" title="Изменить рамку беседы для всех">✧ Рамка чата</button></div>
   <div class="chat-messages" id="chat-messages" role="log" aria-label="Сообщения" aria-live="polite">${chatMessagesHTML()}</div>
   ${S.chatDesignOpen?`<div class="chat-style-editor" id="chat-style-editor">${chatEditorHTML(S.chatDesignOpen)}</div>`:''}
   <form id="chat-form" class="chat-composer"><label class="sr-only" for="chat-text">Ваше сообщение</label><textarea id="chat-text" name="message" maxlength="2000" rows="2" placeholder="Напишите сообщение…" required></textarea><button class="btn secondary chat-design-trigger" type="button" data-action="chat-design-message">✦ Оформление</button><button class="btn primary" type="submit">${ic('arrow')} Отправить</button></form></section></div>`;
@@ -286,10 +378,13 @@ function chatPage(){
 function updateChatView(){
  const messages=$('#chat-messages'),rooms=$('#chat-rooms-list');
  if(!messages||!rooms)return;
+ const signature=JSON.stringify([S.chatData?.hasMore,S.chatData?.messages.map(m=>[m.id,m.avatar_revision,m.avatar_url,m.style])]);
+ const changed=messages.dataset.contentKey!==signature;
  const shouldScroll=messages.scrollHeight-messages.scrollTop-messages.clientHeight<110;
- messages.innerHTML=chatMessagesHTML();rooms.innerHTML=chatRoomsHTML();
- hydrateAvatars();updateUnreadUI();applyRoomTheme();
- if(shouldScroll)messages.scrollTop=messages.scrollHeight;
+ if(changed){messages.innerHTML=chatMessagesHTML();messages.dataset.contentKey=signature}
+ rooms.innerHTML=chatRoomsHTML();
+ hydrateAvatars();updateUnreadUI();applyRoomTheme();updateEdgeRunners();
+ if(changed&&shouldScroll)messages.scrollTop=messages.scrollHeight;
 }
 async function fetchChat(initial=false){
  if(chatBusy||!S.user)return false;
@@ -404,7 +499,7 @@ function prankPage(){
  </div>
  <div class="prank-hint">${ic('info')} Эффекты видит только выбранный сотрудник с открытой вкладкой. Новые анимации короткие, не перехватывают клики и учитывают настройку уменьшения движения. Для голосового сообщения нужен включённый звук: если он недоступен, текст остаётся на экране.</div>`
 }
-function teamPage(){let people=S.data.users;return `${head('КОМАНДА','Сотрудники','Создавайте аккаунты, управляйте доступом и следите за результатами.',`<button class="btn primary" data-modal="user">${ic('plus')} Добавить сотрудника</button>`)}<div class="team-grid">${people.map(u=>{let ent=S.data.entries.filter(e=>e.user_id===u.id),hours=ent.reduce((a,e)=>a+Number(e.quantity)*Number(S.data.tasks.find(t=>t.id===e.task_id)?.norm||0),0);return `<div class="team-card ${u.active?'':'inactive'}"><div class="team-card-top"><div class="avatar">${esc(initials(u.name))}</div><span class="badge ${u.active?'green':'gray'}">${u.active?'● Активен':'● Отключён'}</span></div><h3>${esc(u.name)}</h3><p>@${esc(u.username)}${u.role==='admin'?' · Администратор':''}</p><div class="team-card-footer"><span>${ent.length} записей · ${fmt(hours)} ч</span><div><button class="table-icon-btn" title="Изменить сотрудника и права" data-modal="edit-user" data-id="${u.id}">${ic('edit')}</button><button class="table-icon-btn ${u.active?'danger':''}" title="${u.active?'Отключить':'Включить'}" data-action="toggle-user" data-id="${u.id}">${ic(u.active?'lock':'check')}</button></div></div></div>`}).join('')}</div><div class="settings-area"><div class="stat-icon mint">${ic('lock')}</div><div><b style="font-size:11px">Доступ к данным</b><p>Сотрудник меняет только данные в «Мои работы»; табель доступен ему для просмотра. Администратор управляет командой и видит общий отчёт.</p></div></div>`}
+function teamPage(){let people=S.data.users;return `${head('КОМАНДА','Сотрудники','Создавайте аккаунты, управляйте доступом и следите за результатами.',`<button class="btn primary" data-modal="user">${ic('plus')} Добавить сотрудника</button>`)}<div class="team-grid">${people.map(u=>{let ent=S.data.entries.filter(e=>e.user_id===u.id),hours=ent.reduce((a,e)=>a+Number(e.quantity)*Number(S.data.tasks.find(t=>t.id===e.task_id)?.norm||0),0);return `<div class="team-card ${u.active?'':'inactive'}"><div class="team-card-top">${avatarButton(u,'avatar')}<span class="badge ${u.active?'green':'gray'}">${u.active?'● Активен':'● Отключён'}</span></div><h3>${esc(u.name)}</h3><p>@${esc(u.username)}${u.role==='admin'?' · Администратор':''}</p><div class="team-card-footer"><span>${ent.length} записей · ${fmt(hours)} ч</span><div><button class="table-icon-btn" title="Изменить сотрудника и права" data-modal="edit-user" data-id="${u.id}">${ic('edit')}</button><button class="table-icon-btn ${u.active?'danger':''}" title="${u.active?'Отключить':'Включить'}" data-action="toggle-user" data-id="${u.id}">${ic(u.active?'lock':'check')}</button></div></div></div>`}).join('')}</div><div class="settings-area"><div class="stat-icon mint">${ic('lock')}</div><div><b style="font-size:11px">Доступ к данным</b><p>Сотрудник меняет только данные в «Мои работы»; табель доступен ему для просмотра. Администратор управляет командой и видит общий отчёт.</p></div></div>`}
 function catalogPage(){let tasks=S.data.tasks.filter(t=>!S.search||t.title.toLowerCase().includes(S.search.toLowerCase())||t.category.toLowerCase().includes(S.search.toLowerCase()));return `${head('СПРАВОЧНИК','Каталог работ','Один общий список для всей команды. Добавленные работы сразу доступны сотрудникам.',`<button class="btn primary" data-modal="task">${ic('plus')} Новая работа</button>`)}<div class="card"><div class="filter-bar"><div class="search-input">${ic('search')}<input data-filter="search" value="${esc(S.search)}" placeholder="Найти вид работы…"></div><span class="count-chip">${S.data.tasks.filter(t=>t.active).length} активных работ</span></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Выполняемая работа</th><th>Направление</th><th>Ед. изм.</th><th>Норма, ч</th><th>Статус</th><th class="right">Действия</th></tr></thead><tbody>${tasks.map(t=>`<tr><td><div class="truncate strong" title="${esc(t.title)}">${esc(t.title)}</div></td><td><span class="badge blue">${esc(t.category)}</span></td><td class="muted">${esc(t.unit)}</td><td class="num">${fmt(t.norm,3)}</td><td><span class="badge ${t.active?'green':'gray'}">${t.active?'Активна':'Архив'}</span></td><td class="right"><button class="table-icon-btn" title="Редактировать" data-modal="edit-task" data-id="${t.id}">${ic('edit')}</button><button class="table-icon-btn ${t.active?'danger':''}" title="${t.active?'Архивировать':'Восстановить'}" data-action="toggle-task" data-id="${t.id}">${ic(t.active?'trash':'check')}</button></td></tr>`).join('')}</tbody></table></div><div class="table-footer">${tasks.length} работ · Архивирование сохраняет историю выполненных работ в отчётах</div></div>`}
 function activityPage(){return `${head('ИСТОРИЯ / АУДИТ','Журнал действий','Изменения и события в системе сохраняются автоматически.',`<button class="btn secondary" data-action="refresh">${ic('history')} Обновить</button>`)}<div class="card card-pad"><div class="card-head"><div><h3>Последние события</h3><p>До 150 последних действий</p></div><span class="badge green">${S.logs?.logs?.length||0} событий</span></div>${S.logs?.logs?.length?S.logs.logs.map(a=>`<div class="activity-item"><div class="activity-icon ${a.action.includes('user')?'blue':''}">${ic(a.action==='attendance'?'calendar':a.action==='comment'?'message':a.action.includes('user')?'users':a.action.includes('task')?'layers':'check')}</div><div style="min-width:0;flex:1"><b>${esc(a.actor)} · ${esc(({login:'Вход в систему',logout:'Выход',entry:'Отметка работы',delete_entry:'Удаление записи',attendance:'Изменение табеля',user_added:'Новый сотрудник',user_updated:'Изменение сотрудника',task_added:'Новая работа',task_updated:'Изменение работы',password:'Смена пароля',import:'Импорт данных',comment:'Комментарий к ячейке'})[a.action]||a.action)}</b><p style="white-space:normal;max-width:unset">${esc(a.detail)}</p></div><small class="log-date">${esc(dayTime(a.created_at))}</small></div>`).join(''):emptyState('Событий пока нет','Журнал появится после первых действий')}</div>`}
 async function compressedAvatar(file){
@@ -701,7 +796,17 @@ function saveBackupBlob(response,name){
  });
 }
 document.addEventListener('submit',async e=>{if(e.target.id==='login-form'){e.preventDefault();const form=e.target,btn=form.querySelector('button');btn.disabled=true;$('#login-error').textContent='';try{const d=Object.fromEntries(new FormData(form).entries());const res=await api('/api/login','POST',d);setToken(res.session_token);S.user=res.user;S.page='overview';await load();startPrankPolling()}catch(err){$('#login-error').textContent=err.message}finally{btn.disabled=false}}else if(e.target.id==='modal-form'){e.preventDefault();await saveModal(e.target)}else if(e.target.id==='chat-form'){e.preventDefault();const form=e.target,input=form.querySelector('textarea'),body=input.value.trim(),button=form.querySelector('button[type=submit]');if(!body)return;button.disabled=true;try{await api('/api/chat','POST',{recipient_id:S.chatRoom==='general'?null:Number(S.chatRoom),body,style:normalizedStyle(S.messageStyle)});input.value='';await fetchChat();updateChatView();const box=$('#chat-messages');if(box)box.scrollTop=box.scrollHeight;input.focus()}catch(err){notify(err.message,true)}finally{button.disabled=false}}});
-document.addEventListener('click',async e=>{if(S.presenceOpen&&!e.target.closest('.presence-widget')){S.presenceOpen=false;updatePresenceWidget()}const nav=e.target.closest('[data-nav]');if(nav){try{await navigate(nav.dataset.nav)}catch(err){notify(err.message,true)}return}const btn=e.target.closest('[data-action],[data-modal],[data-status]');if(!btn)return;if(btn.dataset.modal){S.modal={type:btn.dataset.modal,id:btn.dataset.id,user:btn.dataset.user,task:btn.dataset.task,day:btn.dataset.day};renderModal();return}if(btn.dataset.status){S.attendanceChoice=btn.dataset.status;document.querySelectorAll('.status-choice').forEach(b=>b.classList.toggle('selected',b===btn));$('#reason-wrap').style.display=S.attendanceChoice==='absent'?'block':'none';const reason=$('#reason-wrap input');reason.required=S.attendanceChoice==='absent';return}
+document.addEventListener('click',async e=>{if(S.presenceOpen&&!e.target.closest('.presence-widget')){S.presenceOpen=false;updatePresenceWidget()}const nav=e.target.closest('[data-nav]');if(nav){try{await navigate(nav.dataset.nav)}catch(err){notify(err.message,true)}return}const btn=e.target.closest('[data-action],[data-modal],[data-status]');if(!btn)return;
+ if(btn.dataset.action==='avatar-preview'){openAvatarPreview(btn);return}
+ if(btn.dataset.action==='avatar-preview-close'){
+  if(btn.classList.contains('avatar-lightbox-backdrop')&&e.target!==btn)return;
+  closeAvatarPreview();return
+ }
+ if(btn.dataset.action==='avatar-preview-edit'){
+  if(S.avatarPreview?.id!==S.user?.id)return;
+  closeAvatarPreview(false);S.modal={type:'avatar'};renderModal();return
+ }
+ if(btn.dataset.modal){S.modal={type:btn.dataset.modal,id:btn.dataset.id,user:btn.dataset.user,task:btn.dataset.task,day:btn.dataset.day};renderModal();return}if(btn.dataset.status){S.attendanceChoice=btn.dataset.status;document.querySelectorAll('.status-choice').forEach(b=>b.classList.toggle('selected',b===btn));$('#reason-wrap').style.display=S.attendanceChoice==='absent'?'block':'none';const reason=$('#reason-wrap input');reason.required=S.attendanceChoice==='absent';return}
  if(btn.dataset.action==='avatar-remove'){if(!confirm('Удалить текущий аватар?'))return;try{await api('/api/avatar','POST',{remove:true});clearAvatarCache();closeModal();await load();notify('Аватар удалён')}catch(err){notify(err.message,true)}return}
  if(btn.dataset.action==='chat-design-message'){toggleChatEditor('message');return}
  if(btn.dataset.action==='chat-design-room'){toggleChatEditor('room');return}
@@ -770,15 +875,9 @@ document.addEventListener('click',async e=>{if(S.presenceOpen&&!e.target.closest
  case 'toggle-user':{let u=S.data.users.find(u=>u.id===Number(btn.dataset.id));if(!confirm(`${u.active?'Отключить':'Включить'} сотрудника ${u.name}?`))return;await api('/api/users/'+u.id,'PATCH',{active:!u.active});notify('Доступ сотрудника обновлён');await load();break}
  case 'toggle-task':{let t=S.data.tasks.find(t=>t.id===Number(btn.dataset.id));if(!confirm(`${t.active?'Архивировать':'Восстановить'} работу «${t.title}»?`))return;await api('/api/tasks/'+t.id,'PATCH',{active:!t.active});notify('Каталог обновлён');await load();break}
  }}catch(err){notify(err.message,true)}});
-document.addEventListener('input',e=>{if(e.target.id==='backup-confirm'){$('[data-action="backup-restore"]').disabled=e.target.value.trim()!=='ВОССТАНОВИТЬ';return}if(!e.target.dataset.filter)return;let type=e.target.dataset.filter,value=e.target.value;if(type==='search')S.search=value;if(type==='user')S.userFilter=value;let pos=e.target.selectionStart;let name=e.target.dataset.filter;let prev=document.activeElement;render();let next=document.querySelector(`[data-filter="${name}"]`);if(next){next.focus();if(name==='search')next.setSelectionRange(pos,pos)}});
+document.addEventListener('input',e=>{if(e.target.dataset.styleField){setChatStyleField(e.target);return}if(e.target.id==='backup-confirm'){$('[data-action="backup-restore"]').disabled=e.target.value.trim()!=='ВОССТАНОВИТЬ';return}if(!e.target.dataset.filter)return;let type=e.target.dataset.filter,value=e.target.value;if(type==='search')S.search=value;if(type==='user')S.userFilter=value;let pos=e.target.selectionStart;let name=e.target.dataset.filter;let prev=document.activeElement;render();let next=document.querySelector(`[data-filter="${name}"]`);if(next){next.focus();if(name==='search')next.setSelectionRange(pos,pos)}});
 document.addEventListener('change',e=>{
- if(e.target.dataset.styleField&&S.chatDesignOpen){
-  const key=e.target.dataset.styleField,value=key==='glow'?e.target.checked:
-   Object.hasOwn(CHAT_STYLE_CATEGORIES,key)?Number(e.target.value):e.target.value;
-  if(S.chatDesignOpen==='room')S.roomDraft={...normalizedStyle(S.roomDraft),[key]:value};
-  else S.messageStyle={...normalizedStyle(S.messageStyle),[key]:value};
-  refreshChatEditor();return
- }
+ if(e.target.dataset.styleField&&S.chatDesignOpen){setChatStyleField(e.target);refreshChatEditor();return}
  if(e.target.id==='backup-file'){S.backupFile=e.target.files?.[0]||null;S.backupPreview=null;render();return}
  if(e.target.id==='prank-user'){S.prankTarget=Number(e.target.value);updatePrankPresence();return}
  if(e.target.dataset.cell){saveGridCell(e.target);return}
@@ -791,6 +890,11 @@ document.addEventListener('change',e=>{
  }
 });
 document.addEventListener('keydown',e=>{
+ if(S.avatarPreview&&e.key==='Escape'){e.preventDefault();closeAvatarPreview();return}
+ if(S.avatarPreview&&e.key==='Tab'){
+  const buttons=[...document.querySelectorAll('#avatar-viewer-root button')];
+  if(buttons.length){const current=buttons.indexOf(document.activeElement),next=buttons[(current+(e.shiftKey?-1:1)+buttons.length)%buttons.length];e.preventDefault();next.focus();return}
+ }
  if(e.target.id==='chat-text'&&e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();e.target.form.requestSubmit();return}
  if(e.key==='Escape'&&S.modal){closeModal();return}
  if(e.key==='Escape'&&S.presenceOpen){S.presenceOpen=false;updatePresenceWidget();$('#presence-toggle')?.focus();return}
@@ -807,5 +911,6 @@ document.addEventListener('keydown',e=>{
  }
 });
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&S.user){pollPranks();if(S.page==='chat')pollChat()}});
+window.addEventListener('resize',updateEdgeRunners);
 window.addEventListener('offline',setPresenceOffline);window.addEventListener('online',()=>{if(S.user){pollPranks();if(S.page==='chat')pollChat()}});
 init();
