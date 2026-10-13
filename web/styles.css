@@ -520,11 +520,11 @@ body.menu-open{overflow:hidden}
 .vacation-scroll{overflow-x:auto;scrollbar-color:#aed8cb #eef6f3}
 .vacation-table{border-collapse:separate;border-spacing:0;width:100%;min-width:1290px;font-size:12px;line-height:1.36;font-variant-numeric:tabular-nums;table-layout:fixed}
 .vacation-table th,.vacation-table td{border-right:1px solid #e0ebe7;border-bottom:1px solid #e5efeb;text-align:center;padding:0 4px;vertical-align:middle}
-.vacation-table tr>:first-child{width:190px;text-align:center;padding:8px 7px;position:sticky;left:0;z-index:2;background:#f7fbf9;color:#2b5551;font-size:12px;white-space:normal;overflow-wrap:anywhere}
+.vacation-table .vacation-fio-col{width:190px;text-align:center;padding:8px 7px;position:sticky;left:0;z-index:2;background:#f7fbf9;color:#2b5551;font-size:12px;white-space:normal;overflow-wrap:anywhere}
 .vacation-table thead th{height:40px;background:#eaf6f0;color:#34675c;font-weight:800;position:sticky;top:0;z-index:3}
-.vacation-table thead tr>:first-child{z-index:5;background:#dcefe6}
+.vacation-table thead th.vacation-fio-col{z-index:5;background:#dcefe6}
 .vacation-table thead .vacation-year-header{background:#dcefe6;color:#136858;letter-spacing:.8px;font-size:15px}
-.vacation-table tr>:last-child:not(:first-child){width:85px}
+.vacation-table .vacation-total-col{width:85px}
 .vacation-table tbody tr:nth-child(even) th{background:#eff7f2}
 .vacation-table tbody tr:nth-child(even) td{background:#f9fcfa}
 .vacation-table tbody td.vacation-filled{background:#ebf8f3}
@@ -542,7 +542,7 @@ button.vacation-cell:hover,button.vacation-cell:focus-visible{outline:2px solid 
 .vacation-print-icon{display:grid;place-items:center;width:50px;height:50px;margin:0 auto 15px;border-radius:14px;background:#dff6e9;color:#098673}
 .vacation-print-dialog h2{font-size:21px;color:#183d44}.vacation-print-dialog p{margin:10px 0 20px;color:#698180;font-size:14px;line-height:1.5}
 .vacation-print-buttons{display:flex;justify-content:center;flex-wrap:wrap;gap:9px}
-@media(max-width:620px){.vacation-intro{padding:13px}.vacation-table{min-width:1180px}.vacation-table tr>:first-child{width:160px}}
+@media(max-width:620px){.vacation-intro{padding:13px}.vacation-table{min-width:1180px}}
 @media print{
  @page{size:A3 landscape;margin:10mm}
  body{background:#fff!important}
@@ -555,9 +555,9 @@ button.vacation-cell:hover,button.vacation-cell:focus-visible{outline:2px solid 
  .vacation-section-head{padding:3px 0;border:0;background:#fff}
  .vacation-scroll{overflow:visible!important}
  .vacation-table{width:100%!important;min-width:0!important;font-size:8px;table-layout:fixed}
- .vacation-table tr>:first-child{position:static!important;width:15%!important;font-size:8px;padding:4px}
+ .vacation-table .vacation-fio-col{position:static!important;width:15%!important;font-size:8px;padding:4px}
  .vacation-table th,.vacation-table td{border-color:#c7d7ce!important}
- .vacation-table tr>:last-child:not(:first-child){width:5%}
+ .vacation-table .vacation-total-col{width:5%}
  .vacation-table thead th{position:static!important;height:25px}
  .vacation-cell{min-height:29px;font-size:8px;padding:2px 0}
  .vacation-mark{font-size:12px}.vacation-table tfoot th,.vacation-table tfoot td{height:20px;font-size:8px}
