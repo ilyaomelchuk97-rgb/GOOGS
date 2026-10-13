@@ -90,9 +90,10 @@ def export_xlsx(year,people,rows):
     from openpyxl.utils import get_column_letter
     book=Workbook();sheet=book.active;sheet.title=f'Отпуск {year}'
     sheet.sheet_view.showGridLines=False
-    sheet.column_dimensions['A'].width=38
-    for i in range(2,14):sheet.column_dimensions[get_column_letter(i)].width=20
-    sheet.column_dimensions['N'].width=17
+    sheet.column_dimensions['A'].width=29.57  # Source sheet: compact FIO column with wrapping.
+    sheet.column_dimensions['B'].width=11.14
+    for i in range(3,14):sheet.column_dimensions[get_column_letter(i)].width=13
+    sheet.column_dimensions['N'].width=12.43
     line=Side(style='thin',color='CDE2DD')
     border=Border(left=line,right=line,top=line,bottom=line)
     cells={(r['user_id'],r['month']):r for r in rows}
@@ -108,7 +109,7 @@ def export_xlsx(year,people,rows):
             cell.fill=PatternFill('solid',fgColor='DDEFEA');cell.font=Font(bold=True,color='205E54')
             cell.alignment=Alignment(horizontal='center',vertical='center',wrap_text=True)
         for index,person in enumerate(people):
-            at=row+2+index;sheet.cell(at,1,person['name'])
+            at=row+2+index;sheet.cell(at,1,person['name']).alignment=Alignment(horizontal='center',vertical='center',wrap_text=True)
             days=0
             for month in range(1,13):
                 cell=sheet.cell(at,month+1);entry=cells.get((person['id'],month))
@@ -121,7 +122,7 @@ def export_xlsx(year,people,rows):
                         if entry['material_help']:cell.fill=PatternFill('solid',fgColor='D7F3DC')
                 cell.alignment=Alignment(horizontal='center',vertical='center',wrap_text=True)
             if offset==0:sheet.cell(at,14,days or None)
-            sheet.row_dimensions[at].height=40 if offset==0 else 28
+            sheet.row_dimensions[at].height=32 if offset==0 else 30
         for month in range(1,13):
             n=calendar.monthrange(year,month)[1]
             sheet.cell(row+2+len(people),month+1,f'{n} дней в месяце')
