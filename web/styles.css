@@ -330,6 +330,7 @@ body.menu-open{overflow:hidden}
 .chat-panel-head-label{min-width:0;flex:1}
 .chat-panel-head-label b,.chat-panel-head-label small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chat-design-trigger{font-size:12px;min-height:32px;padding:0 9px;flex:none}
+.chat-head-actions{display:flex;align-items:center;gap:7px;flex:none}
 .chat-style-editor{flex:none;max-height:min(52vh,460px);overflow:auto;padding:15px 17px;border-top:1px solid #d8eae5;background:linear-gradient(150deg,#f7fcf9,#fff)}
 .chat-style-title{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:10px;font-size:13px;color:#205b57}
 .chat-style-title span{color:#648589}
@@ -359,7 +360,7 @@ body.menu-open{overflow:hidden}
 @keyframes chat-border-breathe{0%,100%{outline-offset:0;opacity:1}50%{outline-offset:4px;opacity:.8}}
 @keyframes chat-border-hue{to{filter:hue-rotate(360deg)}}
 @media(max-width:940px){.chat-style-controls{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:700px){.chat-composer{flex-wrap:wrap}.chat-composer textarea{flex-basis:100%}.chat-panel-head{flex-wrap:wrap}.chat-panel-head-label{flex-basis:50%}.chat-style-editor{max-height:38vh}}
+@media(max-width:700px){.chat-composer{flex-wrap:wrap}.chat-composer textarea{flex-basis:100%}.chat-panel-head{flex-wrap:wrap}.chat-panel-head-label{flex-basis:50%}.chat-head-actions{width:100%;justify-content:flex-end}.chat-style-editor{max-height:38vh}}
 
 .chat-painted.effect-1{border:2px solid var(--effect-color)}
 .chat-painted.effect-2{border:2px dashed var(--effect-color)}
@@ -498,3 +499,66 @@ body.menu-open{overflow:hidden}
   100%{transform:translate(0,0) rotate(360deg)}
 }
 .chat-frame-decor .chat-edge-runner{left:0;top:0}
+
+/* Годовой план отпуска — две таблицы, повторяющие структуру исходного XLSX. */
+.vacation-year-switch{display:flex;align-items:center;gap:4px;border:1px solid #cfe7e0;background:#fff;border-radius:12px;padding:4px}
+.vacation-year-switch button{border:0;width:34px;height:34px;display:grid;place-items:center;background:transparent;color:#28746d;border-radius:8px}
+.vacation-year-switch button:hover{background:#e6f6ef}
+.vacation-year-switch strong{min-width:54px;text-align:center;color:#1d594f;font-variant-numeric:tabular-nums}
+.vacation-intro{display:flex;align-items:center;gap:15px;padding:17px 22px;background:linear-gradient(110deg,#124a4a,#1c7368);border-radius:17px;color:#fff;box-shadow:0 12px 22px #246c6422;margin-bottom:16px}
+.vacation-intro-icon{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;flex:none;background:#ffffff26;color:#baf5d8}
+.vacation-intro p{line-height:1.55;color:#d0efdf;font-size:14px}.vacation-intro b{color:#fff;font-size:17px}
+.vacation-import{display:flex;align-items:center;flex-wrap:wrap;gap:12px;padding:12px 17px;background:#fff;border:1px solid #dbe9e5;border-radius:13px;margin-bottom:15px}
+.vacation-import label{cursor:pointer}.vacation-import small{font-size:13px;color:#6a8584}
+.vacation-import-preview{flex-basis:100%;border-top:1px solid #e8f0ec;padding-top:11px;display:flex;align-items:center;flex-wrap:wrap;gap:9px;font-size:13px;color:#3d6661}
+.vacation-import-preview span{flex-basis:100%}.vacation-import-preview strong{color:#aa643f;flex-basis:100%}
+.vacation-print-title{display:none}
+.vacation-section{background:#fff;border:1px solid #e2ece8;border-radius:16px;box-shadow:var(--shadow);overflow:hidden;margin-bottom:21px}
+.vacation-section-head{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid #e4efeb;background:#f9fcfa}
+.vacation-section-head span{color:#188f78;background:#e4f7ef;border-radius:8px;padding:6px 9px;font-size:11px;font-weight:850;letter-spacing:.3px}
+.vacation-section-head b{font-size:15px;color:#245652}
+.vacation-scroll{overflow-x:auto;scrollbar-color:#aed8cb #eef6f3}
+.vacation-table{border-collapse:separate;border-spacing:0;width:100%;min-width:1420px;font-size:12px;line-height:1.36;font-variant-numeric:tabular-nums;table-layout:fixed}
+.vacation-table th,.vacation-table td{border-right:1px solid #e0ebe7;border-bottom:1px solid #e5efeb;text-align:center;padding:0 4px;vertical-align:middle}
+.vacation-table tr>:first-child{width:220px;text-align:left;padding:10px 13px;position:sticky;left:0;z-index:2;background:#f7fbf9;color:#2b5551;font-size:13px}
+.vacation-table thead th{height:40px;background:#eaf6f0;color:#34675c;font-weight:800;position:sticky;top:0;z-index:3}
+.vacation-table thead tr>:first-child{z-index:5;background:#dcefe6}
+.vacation-table thead .vacation-year-header{background:#dcefe6;color:#136858;letter-spacing:.8px;font-size:15px}
+.vacation-table tr>:last-child:not(:first-child){width:85px}
+.vacation-table tbody tr:nth-child(even) th{background:#eff7f2}
+.vacation-table tbody tr:nth-child(even) td{background:#f9fcfa}
+.vacation-table tbody td.vacation-filled{background:#ebf8f3}
+.vacation-table tbody td.vacation-help{background:#d5f3dd!important;color:#156d44}
+.vacation-table tbody td.vacation-total{font-size:15px;color:#177a66;font-weight:850}
+.vacation-cell{display:flex;align-items:center;justify-content:center;width:100%;min-height:50px;border:0;background:transparent;color:inherit;padding:6px 2px;font-size:12px;line-height:1.5;font-weight:700;text-align:center}
+button.vacation-cell:hover,button.vacation-cell:focus-visible{outline:2px solid #17ae8d;outline-offset:-2px;background:#dff6e9;color:#07594d;border-radius:4px}
+.vacation-mark{font-size:18px;font-weight:900;color:#178269;min-height:40px}
+.vacation-help .vacation-mark{color:#116837}
+.vacation-empty{color:#c1d4ca}.vacation-no-people{padding:20px!important;color:#738985}
+.vacation-table tfoot th,.vacation-table tfoot td{height:36px;background:#f1f7f4;color:#729088;font-size:11px;font-weight:700}
+.vacation-print-backdrop{position:fixed;inset:0;z-index:90;background:#102e3dc0;display:grid;place-items:center;padding:18px;backdrop-filter:blur(6px)}
+.vacation-print-dialog{position:relative;width:min(100%,420px);padding:29px;background:#fff;border-radius:20px;box-shadow:0 24px 80px #092a3750;text-align:center}
+.vacation-print-dialog>.close-btn{position:absolute;right:16px;top:16px}
+.vacation-print-icon{display:grid;place-items:center;width:50px;height:50px;margin:0 auto 15px;border-radius:14px;background:#dff6e9;color:#098673}
+.vacation-print-dialog h2{font-size:21px;color:#183d44}.vacation-print-dialog p{margin:10px 0 20px;color:#698180;font-size:14px;line-height:1.5}
+.vacation-print-buttons{display:flex;justify-content:center;flex-wrap:wrap;gap:9px}
+@media(max-width:620px){.vacation-intro{padding:13px}.vacation-table{min-width:1300px}.vacation-table tr>:first-child{width:185px}}
+@media print{
+ @page{size:A3 landscape;margin:10mm}
+ body{background:#fff!important}
+ body *{visibility:hidden!important;animation:none!important;filter:none!important}
+ .vacation-print-area,.vacation-print-area *{visibility:visible!important}
+ .vacation-print-area{position:absolute!important;left:0;top:0;width:100%!important;margin:0!important}
+ .vacation-print-title{display:flex;justify-content:space-between;align-items:end;border-bottom:2px solid #237b6a;margin-bottom:12px;padding-bottom:8px}
+ .vacation-print-title h2{font-size:17px;color:#21594e}.vacation-print-title span{font-size:11px;color:#648778}
+ .vacation-section{border:0;box-shadow:none;margin:0 0 11px;overflow:visible;break-inside:avoid}
+ .vacation-section-head{padding:3px 0;border:0;background:#fff}
+ .vacation-scroll{overflow:visible!important}
+ .vacation-table{width:100%!important;min-width:0!important;font-size:8px;table-layout:fixed}
+ .vacation-table tr>:first-child{position:static!important;width:19%!important;font-size:8px;padding:4px}
+ .vacation-table th,.vacation-table td{border-color:#c7d7ce!important}
+ .vacation-table tr>:last-child:not(:first-child){width:5%}
+ .vacation-table thead th{position:static!important;height:25px}
+ .vacation-cell{min-height:29px;font-size:8px;padding:2px 0}
+ .vacation-mark{font-size:12px}.vacation-table tfoot th,.vacation-table tfoot td{height:20px;font-size:8px}
+}

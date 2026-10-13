@@ -46,6 +46,14 @@ CREATE TABLE IF NOT EXISTS users (
           room_key TEXT PRIMARY KEY, theme_json TEXT NOT NULL,
           updated_by INTEGER NOT NULL REFERENCES users(id),
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS vacation_schedule (
+ user_id INTEGER NOT NULL REFERENCES users(id),
+ year INTEGER NOT NULL CHECK(year BETWEEN 2020 AND 2100),
+ month INTEGER NOT NULL CHECK(month BETWEEN 1 AND 12),
+ start_date TEXT NOT NULL, end_date TEXT NOT NULL,
+ material_help INTEGER NOT NULL DEFAULT 0 CHECK(material_help IN (0,1)),
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(user_id,year,month));
         CREATE TABLE IF NOT EXISTS user_avatars (
           user_id INTEGER PRIMARY KEY REFERENCES users(id), image_b64 TEXT NOT NULL DEFAULT '',
           mime TEXT NOT NULL DEFAULT '', image_url TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1);

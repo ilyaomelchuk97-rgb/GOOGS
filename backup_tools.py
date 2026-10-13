@@ -8,11 +8,11 @@ import zipfile
 
 FORMAT = 'forma-sqlite-v1'
 BUSINESS = ('users', 'tasks', 'entries', 'cell_comments', 'attendance',
-            'daily_hours', 'personal_hours', 'activity', 'chat_messages', 'chat_reads', 'chat_themes')
+            'daily_hours', 'personal_hours', 'activity', 'chat_messages', 'chat_reads', 'chat_themes', 'vacation_schedule')
 # Reading messages does not create an hourly backup; new messages do.
 CONTENT_TABLES = tuple(t for t in BUSINESS if t not in ('activity','chat_reads'))
 # Old ZIPs had no chat tables; avatars are deliberately absent from EVERY ZIP.
-REQUIRED = (set(BUSINESS) - {'chat_messages','chat_reads','chat_themes'}) | {'sessions', 'prank_presence', 'prank_events'}
+REQUIRED = (set(BUSINESS) - {'chat_messages','chat_reads','chat_themes','vacation_schedule'}) | {'sessions', 'prank_presence', 'prank_events'}
 CHAT_SCHEMA = '''CREATE TABLE IF NOT EXISTS chat_messages (
  id INTEGER PRIMARY KEY, sender_id INTEGER NOT NULL REFERENCES users(id),
  recipient_id INTEGER REFERENCES users(id), body TEXT NOT NULL,
@@ -27,6 +27,14 @@ CHAT_SCHEMA = '''CREATE TABLE IF NOT EXISTS chat_messages (
  room_key TEXT PRIMARY KEY, theme_json TEXT NOT NULL,
  updated_by INTEGER NOT NULL REFERENCES users(id),
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+ CREATE TABLE IF NOT EXISTS vacation_schedule (
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  year INTEGER NOT NULL CHECK(year BETWEEN 2020 AND 2100),
+  month INTEGER NOT NULL CHECK(month BETWEEN 1 AND 12),
+  start_date TEXT NOT NULL, end_date TEXT NOT NULL,
+  material_help INTEGER NOT NULL DEFAULT 0 CHECK(material_help IN (0,1)),
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(user_id,year,month));
  CREATE TABLE IF NOT EXISTS user_avatars (
  user_id INTEGER PRIMARY KEY REFERENCES users(id), image_b64 TEXT NOT NULL DEFAULT '',
  mime TEXT NOT NULL DEFAULT '', image_url TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1);'''
@@ -69,7 +77,7 @@ def validate(con):
         tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not REQUIRED.issubset(tables):
             raise BackupError('Архив не соответствует текущему формату Forma')
-        if not {'chat_messages','chat_reads','chat_themes','user_avatars'}.issubset(tables):
+        if not {'chat_messages','chat_reads','chat_themes','user_avatars','vacation_schedule'}.issubset(tables):
             con.executescript(CHAT_SCHEMA)  # Старый архив: создать недостающие таблицы.
         if 'style_json' not in {row[1] for row in con.execute('PRAGMA table_info(chat_messages)')}:
             con.execute("ALTER TABLE chat_messages ADD COLUMN style_json TEXT NOT NULL DEFAULT '{}'")

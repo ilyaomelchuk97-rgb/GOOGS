@@ -20,6 +20,7 @@ import threading
 import traceback
 import backup_tools
 import d1_store
+import vacation
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,7 +32,7 @@ ROOT = Path(__file__).resolve().parent
 DB = ROOT / 'worktrack.sqlite3'
 BACKUP_DIR = ROOT / 'backups'
 DB_LOCK = threading.RLock()
-BUILD_ID = '20261007-37'  # Public /health marker to verify which build Render actually serves.
+BUILD_ID = '20261013-39'  # Public /health marker to verify which build Render actually serves.
 # New effects reuse the existing CHECK(kind IN ('people','speech')) table safely.
 # This keeps old production D1/SQLite backups and schema compatible.
 PRANK_EFFECT_PREFIX = '\x1eFORMA_EFFECT_V1:'
@@ -104,6 +105,14 @@ def init_db():
           room_key TEXT PRIMARY KEY, theme_json TEXT NOT NULL,
           updated_by INTEGER NOT NULL REFERENCES users(id),
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS vacation_schedule (
+ user_id INTEGER NOT NULL REFERENCES users(id),
+ year INTEGER NOT NULL CHECK(year BETWEEN 2020 AND 2100),
+ month INTEGER NOT NULL CHECK(month BETWEEN 1 AND 12),
+ start_date TEXT NOT NULL, end_date TEXT NOT NULL,
+ material_help INTEGER NOT NULL DEFAULT 0 CHECK(material_help IN (0,1)),
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(user_id,year,month));
         CREATE TABLE IF NOT EXISTS user_avatars (
           user_id INTEGER PRIMARY KEY REFERENCES users(id), image_b64 TEXT NOT NULL DEFAULT '',
           mime TEXT NOT NULL DEFAULT '', image_url TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1);
@@ -441,6 +450,11 @@ class Handler(BaseHTTPRequestHandler):
                 if path=='/api/presence' and method=='GET': return self.presence(db,user)
                 if path=='/api/prank/online' and method=='GET': return self.prank_online(db,self.require(db,True))
                 if path=='/api/prank/send' and method=='POST': return self.prank_send(db,self.require(db,True),self.body())
+                if path=='/api/vacation' and method=='GET': return self.vacation_list(db,user,q)
+                if path=='/api/vacation/save' and method=='POST': return self.vacation_save(db,self.require(db,True),self.body())
+                if path=='/api/vacation/help' and method=='POST': return self.vacation_help(db,self.require(db,True),self.body())
+                if path=='/api/vacation/import' and method=='POST': return self.vacation_import(db,self.require(db,True),q)
+                if path=='/api/vacation/export' and method=='GET': return self.vacation_export(db,user,q)
                 if path=='/api/bootstrap' and method=='GET': return self.bootstrap(db,user,q)
                 if path=='/api/chat' and method=='GET': return self.chat_list(db,user,q)
                 if path=='/api/chat' and method=='POST': return self.chat_send(db,user,self.body())
@@ -483,6 +497,79 @@ class Handler(BaseHTTPRequestHandler):
         db.execute('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)',(hashlib.sha256(token.encode()).hexdigest(),row['id'],expires))
         log(db,row['id'],'login','Вход в систему'); db.commit()
         self.send_json({'user':{k:row[k] for k in ('id','name','username','role','is_staff','active')},'session_token':token},cookie=f'session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=1209600')
+    def vacation_year(self,q):
+        try: return vacation.valid_year(q.get('year',[str(TODAY().year)])[0])
+        except vacation.VacationError as exc: raise APIError(400,str(exc))
+    def vacation_list(self,db,user,q):
+        year=self.vacation_year(q)
+        people,rows=vacation.roster(db,year)
+        self.send_json({'year':year,'people':people,'entries':rows})
+    def vacation_save(self,db,user,data):
+        try:
+            year=vacation.valid_year(data.get('year'))
+            uid=data.get('user_id');month=data.get('month')
+            if type(uid)!=int or type(month)!=int or not 1<=month<=12: raise vacation.VacationError('Некорректный сотрудник или месяц')
+            person=db.execute('SELECT name FROM users WHERE id=? AND is_staff=1',(uid,)).fetchone()
+            if not person: raise vacation.VacationError('Сотрудник не найден')
+            start=data.get('start_date');end=data.get('end_date')
+            if start=='' and end=='':
+                db.execute('DELETE FROM vacation_schedule WHERE user_id=? AND year=? AND month=?',(uid,year,month))
+                detail=f'Удалён отпуск: {person["name"]}, {year}, {month}'
+            else:
+                vacation.dates(year,month,start,end)
+                db.execute('''INSERT INTO vacation_schedule(user_id,year,month,start_date,end_date)
+                    VALUES(?,?,?,?,?) ON CONFLICT(user_id,year,month) DO UPDATE SET
+                    start_date=excluded.start_date,end_date=excluded.end_date,updated_at=CURRENT_TIMESTAMP''',
+                    (uid,year,month,start,end))
+                detail=f'Отпуск: {person["name"]}, {start}—{end}'
+            log(db,user['id'],'vacation',detail);db.commit()
+        except vacation.VacationError as exc:raise APIError(400,str(exc))
+        self.send_json({'ok':True})
+    def vacation_help(self,db,user,data):
+        try:
+            year=vacation.valid_year(data.get('year'))
+            uid=data.get('user_id');month=data.get('month');help_flag=data.get('material_help')
+            if type(uid)!=int or type(month)!=int or type(help_flag)!=bool or not 1<=month<=12:
+                raise vacation.VacationError('Некорректные данные')
+            exists=db.execute('''SELECT u.name FROM vacation_schedule v JOIN users u ON u.id=v.user_id
+                WHERE v.user_id=? AND v.year=? AND v.month=? AND u.is_staff=1''',(uid,year,month)).fetchone()
+            if not exists:raise vacation.VacationError('Сначала укажите даты отпуска в верхней таблице')
+            db.execute('''UPDATE vacation_schedule SET material_help=?,updated_at=CURRENT_TIMESTAMP
+                WHERE user_id=? AND year=? AND month=?''',(int(help_flag),uid,year,month))
+            log(db,user['id'],'vacation_help',f'{exists["name"]}, {year}-{month:02d}: {"+М" if help_flag else "+"}')
+            db.commit()
+        except vacation.VacationError as exc:raise APIError(400,str(exc))
+        self.send_json({'ok':True})
+    def vacation_import(self,db,user,q):
+        year=self.vacation_year(q)
+        if self.headers.get('Content-Type','').split(';')[0]!='application/octet-stream':
+            raise APIError(415,'Загрузите XLSX')
+        try:size=int(self.headers.get('Content-Length','0'))
+        except ValueError:raise APIError(400,'Некорректный размер XLSX')
+        if not 0<size<=2*1024*1024:raise APIError(413,'Размер XLSX не более 2 МБ')
+        raw=self.rfile.read(size)
+        if len(raw)!=size:raise APIError(400,'Файл не загрузился полностью')
+        try:
+            people,_=vacation.roster(db,year)
+            result=vacation.parse_xlsx(raw,people,year)
+        except vacation.VacationError as exc:raise APIError(400,str(exc))
+        existing={(r['user_id'],r['month']) for r in db.execute('SELECT user_id,month FROM vacation_schedule WHERE year=?',(year,))}
+        pending=[r for r in result['entries'] if (r[0],r[2]) not in existing]
+        payload={'year':year,'matched':result['matched'],'unmatched':result['unmatched'],
+                 'found':len(result['entries']),'new':len(pending),'unchanged':len(result['entries'])-len(pending)}
+        if q.get('preview',['1'])[0]=='0':
+            for row in pending:
+                db.execute('''INSERT OR IGNORE INTO vacation_schedule
+                  (user_id,year,month,start_date,end_date,material_help) VALUES(?,?,?,?,?,?)''',row)
+            log(db,user['id'],'vacation_import',f'{year}: добавлено {len(pending)}, пропущено ранее заполненных {payload["unchanged"]}')
+            db.commit()
+        return self.send_json(payload)
+    def vacation_export(self,db,user,q):
+        year=self.vacation_year(q)
+        people,rows=vacation.roster(db,year)
+        raw=vacation.export_xlsx(year,people,rows)
+        self.send_bytes(raw,f'forma-otpusk-{year}.xlsx',
+                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     def backup_status(self,db,user):
         safety=[]
         if BACKUP_DIR.is_dir():

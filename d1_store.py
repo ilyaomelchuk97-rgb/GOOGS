@@ -112,7 +112,7 @@ class D1Connection:
 # Parents first for inserts, children first for deletes. Volatile login/presence tables
 # are intentionally not copied; users log in again after migration or restore.
 TABLES=('users','tasks','entries','cell_comments','attendance','daily_hours',
-        'personal_hours','activity','chat_messages','chat_reads','chat_themes','user_avatars',
+        'personal_hours','activity','chat_messages','chat_reads','chat_themes','vacation_schedule','user_avatars',
         'sessions','prank_presence','prank_events')
 
 def sqlite_snapshot(remote):
