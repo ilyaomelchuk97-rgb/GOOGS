@@ -38,6 +38,16 @@ function runBackup() { backup_(false); }
 // Run once manually after setup to test immediately, even outside 08–17.
 function testBackupNow() { backup_(true); }
 
+function reportBackup_(url, key, result) {
+  try {
+    const response=UrlFetchApp.fetch(url + '/internal/backup/report', {
+      method:'post',contentType:'application/json',headers:{'X-Forma-Backup-Key':key},
+      payload:JSON.stringify(result),followRedirects:false,muteHttpExceptions:true
+    });
+    if(response.getResponseCode()!==200)console.warn('Backup status acknowledgement failed: HTTP '+response.getResponseCode());
+  } catch(err) { console.warn('Backup ZIP may be saved, but status report failed: '+String(err).slice(0,120)); }
+}
+
 function backup_(force) {
   const now = new Date();
   const hour = Number(Utilities.formatDate(now, FORMA_TIMEZONE, 'H'));
@@ -76,6 +86,7 @@ function backup_(force) {
     if (!/^[a-f0-9]{64}$/.test(signature)) throw new Error('Missing data signature; backup not marked successful');
     if (code === 204 && previous && signature === previous) {
       props.setProperty('LAST_BACKUP_SLOT', slot);
+      reportBackup_(url,key,{state:'unchanged',signature});
       console.log('No changes in work data since the last saved ZIP; skipped ' + slot);
       return;
     }
@@ -93,7 +104,11 @@ function backup_(force) {
       'LAST_CONTENT_FINGERPRINT': signature,
       'LAST_BACKUP_FILE_ID': file.getId()
     });
+    reportBackup_(url,key,{state:'saved',file_name:file.getName(),file_size:file.getSize(),signature});
     console.log('Saved ' + file.getName() + ' (' + file.getSize() + ' bytes)');
+  } catch(err) {
+    try { const {url,key}=settings_(); reportBackup_(url,key,{state:'error',detail:String(err).slice(0,150)}); } catch(_) {}
+    throw err;
   } finally {
     lock.releaseLock();
   }

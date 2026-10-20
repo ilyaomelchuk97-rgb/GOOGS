@@ -562,3 +562,47 @@ button.vacation-cell:hover,button.vacation-cell:focus-visible{outline:2px solid 
  .vacation-cell{min-height:29px;font-size:8px;padding:2px 0}
  .vacation-mark{font-size:12px}.vacation-table tfoot th,.vacation-table tfoot td{height:20px;font-size:8px}
 }
+
+/* Pinned rooms remain visible above recent messages; controls do not nest buttons. */
+.chat-room-general .chat-room-open{flex:1;min-width:0;display:block;padding:0;border:0;background:none;color:inherit;text-align:left;cursor:pointer;font:inherit}
+.chat-room-general .chat-room-open .chat-room-meta{display:block;min-width:0}
+.chat-pin{flex:none;border:0;border-radius:8px;background:transparent;color:#839b9b;font-size:20px;line-height:1;width:30px;height:32px;display:grid;place-items:center}
+.chat-pin:hover,.chat-pin:focus-visible{background:#d7eee4;color:#087e69;outline:2px solid #1ba886}
+.chat-pin.is-pinned{color:#ce8b36}
+
+.backup-monitor-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:16px}
+.backup-monitor-card{display:grid;gap:5px;background:#eff9f4;border:1px solid #bfe7d1;border-radius:14px;padding:16px 18px;color:#286052}
+.backup-monitor-card.warn{background:#fff5e9;border-color:#efcfaa;color:#835329}
+.backup-monitor-card small{font-size:12px;text-transform:uppercase;letter-spacing:.6px;font-weight:800}
+.backup-monitor-card b{font-size:17px;color:#1b4840}
+.backup-monitor-card span{font-size:13px;line-height:1.45}
+@media(max-width:760px){.backup-monitor-grid{grid-template-columns:1fr}}
+
+.backup-deploy-check{padding:14px 18px;border-radius:13px;margin:0 0 14px;display:grid;gap:5px;border:1px solid #b8e4d0;background:#eaf8f1;color:#215e50}
+.backup-deploy-check.warn{background:#fff2e8;border-color:#eabb99;color:#8a4f28}
+.backup-deploy-check span,.backup-deploy-check small{font-size:13px;line-height:1.45}
+
+.vacation-import-mapping{display:grid;gap:6px;max-height:290px;overflow:auto;width:100%}
+.vacation-import-mapping label{display:grid;grid-template-columns:minmax(160px,1fr) minmax(145px,1fr);gap:8px;align-items:center;border-bottom:1px solid #e4efea;padding:5px}
+.vacation-import-mapping label span{overflow-wrap:anywhere}
+.vacation-import-mapping select{min-width:0;border:1px solid #c4ddd2;border-radius:8px;padding:7px;background:#fff;color:#285b50}
+@media(max-width:540px){.vacation-import-mapping label{grid-template-columns:1fr}}
+
+.save-feedback{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px;border:1px solid #a9dfc7;border-radius:10px;background:#eaf8f0;color:#1c6c55;padding:10px 14px;font-size:14px;font-weight:750}
+.save-feedback[hidden],.save-feedback button[hidden]{display:none}
+.save-feedback.conflict{background:#fff1df;border-color:#f0c185;color:#815023}
+.save-feedback button{border:1px solid currentColor;border-radius:7px;background:#fff;padding:5px 9px;color:inherit;font-size:13px;font-weight:800}
+
+.sotipb-panels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:16px}
+.sotipb-panels h3,.sotipb-history h3,.sotipb-result h3{margin:0 0 9px}
+.sotipb-panels p,.sotipb-history p,.sotipb-result p{font-size:14px;line-height:1.6;color:#527066}
+.sotipb-panels .btn{display:inline-flex;margin:8px 8px 0 0}
+.sotipb-file-name{overflow-wrap:anywhere}
+.sotipb-result{margin-bottom:16px;border-color:#a8d9ba;background:#f2fcf6}
+.sotipb-result details{margin-top:14px;max-height:280px;overflow:auto}
+.sotipb-result li{margin-bottom:5px;overflow-wrap:anywhere}
+.sotipb-history-list{display:grid;gap:6px}
+.sotipb-history-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid #dfebe4}
+.sotipb-history-row b{display:block;overflow-wrap:anywhere}.sotipb-history-row small{display:block;margin-top:4px;color:#648179;line-height:1.4}
+.sotipb-history-actions{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;flex-shrink:0}
+@media(max-width:850px){.sotipb-panels{grid-template-columns:1fr}.sotipb-history-row{align-items:flex-start;flex-direction:column}.sotipb-history-actions{justify-content:flex-start}}

@@ -7,6 +7,8 @@ import json
 import os
 import re
 import sqlite3
+import secrets
+import datetime as dt
 import urllib.error
 import urllib.request
 
@@ -112,8 +114,20 @@ class D1Connection:
 # Parents first for inserts, children first for deletes. Volatile login/presence tables
 # are intentionally not copied; users log in again after migration or restore.
 TABLES=('users','tasks','entries','cell_comments','attendance','daily_hours',
-        'personal_hours','activity','chat_messages','chat_reads','chat_themes','vacation_schedule','user_avatars',
+        'personal_hours','activity','chat_messages','chat_reads','chat_themes','chat_pins','vacation_schedule','sotipb_runs','sotipb_parts','user_avatars',
         'sessions','prank_presence','prank_events')
+# Only temporary session/event tables and avatars are intentionally excluded from ZIP.
+EXCLUDED_FROM_BACKUP=frozenset(('sessions','prank_presence','prank_events','user_avatars'))
+
+def require_complete_schema(con):
+    """Fail closed if a future data table is not part of the D1 backup/restore map."""
+    present={row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+    missing=set(TABLES)-present
+    unknown=present-(set(TABLES)|{'restore_stage','backup_monitor'})
+    if missing or unknown:
+        raise RemoteError('Резервная копия остановлена: набор таблиц D1 отличается от версии кода '
+                          '(нет: %s; новые: %s). Обновите модуль резервного копирования, данные не изменены' %
+                          (', '.join(sorted(missing)) or '—',', '.join(sorted(unknown)) or '—'))
 
 def sqlite_snapshot(remote):
     """Download a consistent-enough SQLite snapshot for an admin backup.
@@ -122,13 +136,18 @@ def sqlite_snapshot(remote):
     A second Render instance or external D1 writer must not be running during backup.
     """
     from pathlib import Path
+    from backup_tools import BUSINESS, fingerprint
+    if set(TABLES)-EXCLUDED_FROM_BACKUP != set(BUSINESS):
+        raise RemoteError('Резервная копия остановлена: перечень сохраняемых таблиц не совпадает с составом архива')
     schema=(Path(__file__).parent/'cloudflare'/'schema.sql').read_text()
     remote.commit()
+    require_complete_schema(remote)
     snap=sqlite3.connect(':memory:')
     try:
         snap.executescript(schema)
+        require_complete_schema(snap)
         for table in TABLES:
-            if table in ('sessions','prank_presence','prank_events','user_avatars'): continue
+            if table in EXCLUDED_FROM_BACKUP: continue
             columns=[row[1] for row in snap.execute('PRAGMA table_info("'+table+'")')]
             insert='INSERT INTO "'+table+'" ('+','.join('"'+c+'"' for c in columns)+') VALUES ('+','.join('?' for _ in columns)+')'
             offset=0
@@ -138,30 +157,69 @@ def sqlite_snapshot(remote):
                 snap.executemany(insert, [tuple(row[c] for c in columns) for row in rows])
                 offset+=len(rows)
         snap.commit()
+        if fingerprint(remote)!=fingerprint(snap):
+            raise RemoteError('Снимок D1 не совпал с данными сайта; неполный ZIP не выдан. Повторите позже')
         return snap
     except BaseException:
         snap.close()
         raise
 
 def replace_atomic(remote, source):
-    """One D1 transaction: entire replacement or none. Reject oversize before writing.
+    """Stage large restores in D1; one small final D1.batch swaps ALL business rows.
 
-    This deliberately limits a restore to ~500 KB of *uncompressed* transport JSON;
-    larger databases need a separate planned migration, never a partial restore.
+    The upload is resumable only by a new attempt; uncommitted chunks are temporary.
+    No live business table changes until the final atomic D1.batch succeeds.
     """
     from backup_tools import validate
     validate(source)
-    statements=[{'sql':'DELETE FROM "'+t+'"','params':[]} for t in reversed(TABLES)]
-    for table in TABLES:
-        if table in ('sessions','prank_presence','prank_events','user_avatars'):continue
-        cols=[r[1] for r in source.execute('PRAGMA table_info("'+table+'")')]
-        rows=[list(row) for row in source.execute('SELECT '+','.join('"'+c+'"' for c in cols)+' FROM "'+table+'" ORDER BY rowid')]
-        if not rows:continue
-        sql='INSERT INTO "'+table+'" ('+','.join('"'+c+'"' for c in cols)+') SELECT '+','.join("json_extract(value,'$["+str(i)+"]')" for i in range(len(cols)))+' FROM json_each(?)'
-        statements.append({'sql':sql,'params':[json.dumps(rows,ensure_ascii=False,separators=(',',':'))]})
-    if len(statements)>40: raise RemoteError('Too many D1 statements for atomic restore')
-    payload={'statements':statements}
-    if len(json.dumps(payload,ensure_ascii=False).encode())>490000:
-        raise RemoteError('D1 atomic restore limit: database exceeds 490 KB transport size; no changes made')
+    require_complete_schema(source)
     remote.commit()
-    remote._post('/v1/batch',payload)
+    require_complete_schema(remote)
+    transfer_id=secrets.token_hex(20)
+    cutoff=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
+    remote.query('DELETE FROM restore_stage WHERE created_at<?',(cutoff,))
+    staged=[]
+    try:
+        for table in TABLES:
+            if table in EXCLUDED_FROM_BACKUP:continue
+            cols=[r[1] for r in source.execute('PRAGMA table_info("'+table+'")')]
+            projection=','.join('"'+c+'"' for c in cols)
+            chunk=[];size=2;part=0
+            def upload(rows,chunk_number):
+                payload=json.dumps(rows,ensure_ascii=False,separators=(',',':'))
+                remote.query('INSERT INTO restore_stage(transfer_id,table_name,chunk_no,payload) VALUES(?,?,?,?)',
+                             (transfer_id,table,chunk_number,payload))
+                staged.append((table,chunk_number,payload))
+            for row in source.execute('SELECT '+projection+' FROM "'+table+'" ORDER BY rowid'):
+                item=list(row)
+                encoded=json.dumps(item,ensure_ascii=False,separators=(',',':'))
+                width=len(encoded.encode('utf-8'))+1
+                if width>95000:raise RemoteError('A single database row exceeds the staged restore chunk limit')
+                if chunk and size+width>95000:
+                    upload(chunk,part);part+=1;chunk=[];size=2
+                chunk.append(item);size+=width
+            if chunk:upload(chunk,part)
+        # Confirm each uploaded piece before touching live tables. D1 bridge JSON
+        # may reject or truncate an oversized upload, but cannot go unnoticed.
+        for table,part,payload in staged:
+            row=remote.execute('SELECT payload FROM restore_stage WHERE transfer_id=? AND table_name=? AND chunk_no=?',
+                               (transfer_id,table,part)).fetchone()
+            if not row or row[0]!=payload:raise RemoteError('Staged D1 data failed verification; live records were not changed')
+        statements=[{'sql':'DELETE FROM "'+t+'"','params':[]} for t in reversed(TABLES)]
+        for table in TABLES:
+            if table in EXCLUDED_FROM_BACKUP:continue
+            cols=[r[1] for r in source.execute('PRAGMA table_info("'+table+'")')]
+            projection=','.join('"'+c+'"' for c in cols)
+            extract=','.join("json_extract(j.value,'$["+str(i)+"]')" for i in range(len(cols)))
+            sql=('INSERT INTO "'+table+'" ('+projection+') SELECT '+extract+
+                 ' FROM restore_stage s, json_each(s.payload) j WHERE s.transfer_id=? AND s.table_name=?'+
+                 ' ORDER BY s.chunk_no,CAST(j.key AS INTEGER)')
+            statements.append({'sql':sql,'params':[transfer_id,table]})
+        statements.append({'sql':'DELETE FROM restore_stage WHERE transfer_id=?','params':[transfer_id]})
+        if len(statements)>40:raise RemoteError('Too many D1 statements for atomic restore')
+        remote.commit()
+        remote._post('/v1/batch',{'statements':statements})
+    except Exception:
+        # Do not retry a final batch after a network error: it may have committed.
+        # Leftover stage data is private and expires on the next restore.
+        raise

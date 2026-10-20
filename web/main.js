@@ -12,7 +12,7 @@ function logDate(d){if(!d)return '';return new Date(d.replace(' ','T')+'Z').toLo
 function dayTime(d){if(!d)return '';const date=new Date(d.replace(' ','T')+'Z');return logDate(d)+' · '+date.toLocaleTimeString('ru-RU',{timeZone:'Europe/Minsk',hour:'2-digit',minute:'2-digit'})}
 function dateShift(date,days){let d=new Date(date+'T12:00:00');d.setDate(d.getDate()+days);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 function dayType(day){const d=new Date(day+'T12:00:00').getDay();return d!==0&&d!==6}
-const S={user:null,data:null,month:null,today:null,page:'overview',report:null,logs:null,search:'',userFilter:'',categoryFilter:'',menuOpen:false,modal:null,attendanceChoice:'absent',prankOnline:[],prankTarget:null,presencePeople:[],presenceOnline:false,presenceOpen:false,backupStatus:null,backupPreview:null,backupFile:null,chatRoom:'general',chatData:null,vacationYear:null,vacationData:null,vacationPrintOpen:false,vacationFile:null,vacationImportPreview:null,messageStyle:{},roomDraft:null,chatDesignOpen:null,avatarPreview:null,avatarPreviewFocus:null,unread:{direct:{},general:0}};
+const S={user:null,data:null,month:null,today:null,page:'overview',report:null,logs:null,search:'',userFilter:'',categoryFilter:'',menuOpen:false,modal:null,attendanceChoice:'absent',prankOnline:[],prankTarget:null,presencePeople:[],presenceOnline:false,presenceOpen:false,backupStatus:null,backupPreview:null,backupFile:null,deployCheck:null,saveNotice:null,sotipbHistory:null,sotipbFile:null,sotipbResult:null,chatRoom:'general',chatData:null,chatOrder:{},chatPins:[],vacationYear:null,vacationData:null,vacationPrintOpen:false,vacationFile:null,vacationImportPreview:null,vacationOverrides:{},messageStyle:{},roomDraft:null,chatThemeExpected:null,chatDesignOpen:null,avatarPreview:null,avatarPreviewFocus:null,unread:{direct:{},general:0}};
 const avatarCache=new Map();let chatStatusCursor=null,chatStatusBusy=false;
 function avatarHTML(person){
  const name=esc(initials(person?.name)),url=person?.avatar_url;
@@ -132,7 +132,7 @@ function chatDecor(raw,frame=false){
  const effect=s.border_effect||0;
  if(effect<21||effect>26)return ornaments;
  const image={21:'snake',22:'comet',23:'firefly',24:'electric',25:'rain',26:'aurora'}[effect];
- return ornaments+`<span class="chat-edge-runner runner-${effect}" aria-hidden="true"><img src="/effect-${image}.png?v=20261013-41" alt="" draggable="false"></span>`;
+ return ornaments+`<span class="chat-edge-runner runner-${effect}" aria-hidden="true"><img src="/effect-${image}.png?v=20261020-44" alt="" draggable="false"></span>`;
 }
 function updateEdgeRunners(){
  document.querySelectorAll('.chat-edge-runner').forEach(runner=>{
@@ -166,7 +166,7 @@ function toggleChatEditor(target){
  const old=$('#chat-style-editor');if(old)old.remove();
  if(S.chatDesignOpen===target){S.chatDesignOpen=null;S.roomDraft=null;return}
  S.chatDesignOpen=target;
- if(target==='room')S.roomDraft={...normalizedStyle(S.chatData?.theme)};
+ if(target==='room'){S.roomDraft={...normalizedStyle(S.chatData?.theme)};S.chatThemeExpected={...S.roomDraft}}
  $('#chat-form')?.insertAdjacentHTML('beforebegin',`<div class="chat-style-editor" id="chat-style-editor">${chatEditorHTML(target)}</div>`);
  updateEdgeRunners();
 }
@@ -205,7 +205,7 @@ function applyRoomTheme(){
   if(decorations.dataset.signature!==signature){decorations.innerHTML=chatDecor(theme,true);decorations.dataset.signature=signature}}
  updateEdgeRunners();
 }
-function resetChatSession(){chatStatusCursor=null;chatStatusBusy=false;S.unread={direct:{},general:0};S.messageStyle={};S.roomDraft=null;S.chatDesignOpen=null;clearAvatarCache()}
+function resetChatSession(){chatStatusCursor=null;chatStatusBusy=false;S.unread={direct:{},general:0};S.chatOrder={};S.chatPins=[];S.messageStyle={};S.roomDraft=null;S.chatThemeExpected=null;S.chatDesignOpen=null;clearAvatarCache()}
 let authToken='',tokenInUrl=false;
 try{authToken=sessionStorage.getItem('forma-session')||''}catch{}
 function setToken(token){if((token||'')!==authToken)resetChatSession();authToken=token||'';tokenInUrl=false;try{if(authToken)sessionStorage.setItem('forma-session',authToken);else sessionStorage.removeItem('forma-session')}catch{}}
@@ -222,15 +222,26 @@ async function api(path,method='GET',body){
    try{res=await fetch(authedPath(path),opt)}catch{tokenInUrl=false;throw Error('Не удаётся подключиться к серверу')}
  }
  let result;try{result=await res.json()}catch{throw Error('Сервер недоступен')}
- if(!res.ok){if(res.status===401&&path!='/api/login'){setToken('');S.user=null;stopPrankPolling();stopChatPolling();clearPrankEffect();showLogin()}throw Error(result.error||'Ошибка запроса')}
+ if(!res.ok){
+  if(res.status===409)setSaveNotice(result.error||'Конфликт изменений. Обновите данные перед повтором','conflict');
+  if(res.status===401&&path!='/api/login'){setToken('');S.user=null;stopPrankPolling();stopChatPolling();clearPrankEffect();showLogin()}
+  throw Error(result.error||'Ошибка запроса')
+ }
+ if(method!=='GET'&&/^\/api\/(?:vacation\/(?:save|help)|entries(?:\/|$)|comments|attendance|hours|users(?:\/|$)|tasks(?:\/|$)|chat\/theme)/.test(path))
+  setSaveNotice('Изменения сохранены · '+new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}),'ok');
  return result
+}
+function setSaveNotice(text,kind='ok'){
+ S.saveNotice={text,kind};const area=$('#save-feedback');
+ if(area){area.hidden=false;area.className='save-feedback '+kind;area.querySelector('span').textContent=text;
+  area.querySelector('button').hidden=kind!=='conflict'}
 }
 function notify(message,error=false){const box=document.createElement('div');box.className='toast'+(error?' error':'');box.textContent=message;$('#toast-area').appendChild(box);setTimeout(()=>box.remove(),3600)}
 async function init(){try{let session=await api('/api/session');if(!session.user&&authToken&&!tokenInUrl){tokenInUrl=true;session=await api('/api/session');if(!session.user)setToken('')}S.today=session.today;S.user=session.user;S.month=session.today.slice(0,7);if(S.user){await load();startPrankPolling()}else showLogin()}catch(e){showLogin();notify(e.message,true)}}
-async function load(){S.data=await api('/api/bootstrap?month='+S.month);S.user=S.data.user;S.today=S.data.today;if(S.page==='report'&&isAdmin())S.report=await api('/api/report?month='+S.month);if(S.page==='activity'&&isAdmin())S.logs=await api('/api/logs');if(S.page==='backup'&&isAdmin())S.backupStatus=await api('/api/backup/status');if(S.page==='chat')await fetchChat(true);if(S.page==='vacation'){S.vacationYear??=Number(S.today.slice(0,4));S.vacationData=await api('/api/vacation?year='+S.vacationYear)}render()}
+async function load(){S.data=await api('/api/bootstrap?month='+S.month);S.user=S.data.user;S.today=S.data.today;if(S.page==='report'&&isAdmin())S.report=await api('/api/report?month='+S.month);if(S.page==='activity'&&isAdmin())S.logs=await api('/api/logs');if(S.page==='backup'&&isAdmin())S.backupStatus=await api('/api/backup/status');if(S.page==='sotipb'&&isAdmin())S.sotipbHistory=await api('/api/sotipb/history');if(S.page==='chat')await fetchChat(true);if(S.page==='vacation'){S.vacationYear??=Number(S.today.slice(0,4));S.vacationData=await api('/api/vacation?year='+S.vacationYear)}render()}
 function isAdmin(){return S.user?.role==='admin'}
 function showLogin(){closeAvatarPreview(false);S.user=null;S.menuOpen=false;document.body.classList.remove('menu-open');$('#app').innerHTML=`<div class="login-screen"><div class="login-art"><div class="quote"><div class="hero-kicker login-kicker"><span class="login-pulse-dot" aria-hidden="true"></span>Пространство вашей команды</div><h1>Каждый день —<br><em>результат.</em></h1><p>Отмечайте выполненную работу, следите за графиком и собирайте отчётность без бесконечных таблиц.</p><div class="login-preview">${[31,54,43,72,61,85,64,105,94,127,109,136].map((h,i)=>`<i style="height:${h}px;opacity:${.35+i*.052}"></i>`).join('')}</div></div></div><div class="login-panel"><form id="login-form" class="login-box"><span class="pill">◉ &nbsp;Добро пожаловать</span><h2>Рады вас видеть!</h2><p>Войдите в личный кабинет, чтобы продолжить работу с командой.</p><div class="field"><label for="login-username">Логин</label><input id="login-username" name="username" placeholder="Ваш логин" autocomplete="username" required autofocus></div><div class="field"><label for="login-password">Пароль</label><input id="login-password" name="password" type="password" placeholder="Введите пароль" autocomplete="current-password" required></div><div class="form-error" id="login-error"></div><button type="submit" class="btn primary">Войти в систему ${ic('arrow')}</button><div class="login-foot">Для входа администратора: логин <b>admin</b>, пароль <b>admin</b>. Данные сотрудников — в файле <b>initial_credentials.txt</b>.</div></form></div></div>`}
-const NAV=[['overview','Обзор','grid'],['chat','Чат','message'],['entries','Мои работы','clipboard'],['vacation','Отпуск','calendar'],['report','Сводный отчёт','chart'],['attendance','Табель','calendar'],['team','Сотрудники','users'],['catalog','Каталог работ','layers'],['activity','Журнал действий','history'],['backup','Резервные копии','download'],['prank','Прикол','party']];
+const NAV=[['overview','Обзор','grid'],['chat','Чат','message'],['entries','Мои работы','clipboard'],['vacation','Отпуск','calendar'],['sotipb','СОТИПБ','layers'],['report','Сводный отчёт','chart'],['attendance','Табель','calendar'],['team','Сотрудники','users'],['catalog','Каталог работ','layers'],['activity','Журнал действий','history'],['backup','Резервные копии','download'],['prank','Прикол','party']];
 function presenceListHTML(){
  const people=S.presencePeople;
  return `<div class="presence-popover-head"><b>Сейчас в сети</b><span>${people.length}</span></div><div class="presence-people">${people.map(u=>`<div class="presence-person">${avatarButton(u,'avatar')}<span class="presence-person-name">${esc(u.name)}${u.id===S.user?.id?'<small>Вы</small>':''}${u.role==='admin'&&u.name.toLowerCase()!=='администратор'?'<small>Администратор</small>':''}</span><span class="presence-person-dot" aria-label="В сети"></span></div>`).join('')}</div>`;
@@ -258,8 +269,8 @@ async function refreshPresence(){
  if(!S.presenceOnline)S.presenceOpen=false;
  presenceSeen=Date.now();updatePresenceWidget();
 }
-function navList(){return NAV.filter(([id])=>isAdmin()||!['report','team','catalog','activity','backup','prank'].includes(id)).map(([id,label,icon])=>`<button class="nav-link ${S.page===id?'active':''}" data-nav="${id}">${ic(icon)}<span>${label}</span>${id==='chat'?unreadBadge('all'):''}</button>`).join('')}
-function render(){if(!S.user)return showLogin();document.body.classList.toggle('menu-open',S.menuOpen);const label=NAV.find(n=>n[0]===S.page)?.[1]||'Обзор';$('#app').innerHTML=`<div class="layout"><div id="sidebar-backdrop" class="sidebar-backdrop ${S.menuOpen?'show':''}" data-action="close-menu" aria-hidden="true"></div><aside id="app-sidebar" class="sidebar ${S.menuOpen?'open':''}" aria-label="Навигация по разделам" aria-hidden="${!S.menuOpen}" ${S.menuOpen?'':'inert'}><div class="side-top"><div class="side-title">Отчёт по работе <span>ГООГС СЭОГС</span></div><button class="sidebar-close icon-btn" type="button" data-action="close-menu" title="Закрыть меню" aria-label="Закрыть меню">${ic('x')}</button></div><div class="side-section">Рабочее пространство</div><nav class="nav">${navList()}</nav><div class="side-bottom"><div class="side-note"><div class="note-icon">${ic('sparkle')}</div><b>Всё под контролем</b><p>Работы, табель и отчёты — в одном удобном пространстве команды.</p></div><div class="side-user">${avatarButton(S.user,'avatar','Открыть моё фото профиля')}<div class="meta"><b>${esc(S.user.name)}</b><small>${isAdmin()?'Администратор':'Сотрудник'}</small></div><button title="Выйти" data-action="logout">${ic('logout')}</button></div></div></aside><main class="main"><header class="topbar"><button id="menu-toggle" class="icon-btn mobile-menu" type="button" data-action="menu" title="Открыть меню" aria-label="Открыть меню" aria-controls="app-sidebar" aria-expanded="${S.menuOpen}">${ic('menu')}</button><div class="breadcrumbs">Рабочее пространство <span>/</span> <span>${esc(label)}</span></div>${presenceHTML()}<div class="topbar-right"><span class="top-date">${ic('calendar')} ${new Date(S.today+'T12:00:00').toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric'})}</span><div class="top-divider"></div>${isAdmin()?`<button class="icon-btn" data-modal="password" title="Сменить пароль">${ic('lock')}</button>`:''}${avatarButton(S.user,'avatar avatar-edit-trigger','Открыть моё фото профиля')}</div></header><div class="content">${pageHTML()}</div></main></div><div id="modal-root"></div>`;if(S.modal)renderModal();hydrateAvatars();updateEdgeRunners()}
+function navList(){return NAV.filter(([id])=>isAdmin()||!['report','team','catalog','activity','backup','prank','sotipb'].includes(id)).map(([id,label,icon])=>`<button class="nav-link ${S.page===id?'active':''}" data-nav="${id}">${ic(icon)}<span>${label}</span>${id==='chat'?unreadBadge('all'):''}</button>`).join('')}
+function render(){if(!S.user)return showLogin();document.body.classList.toggle('menu-open',S.menuOpen);const label=NAV.find(n=>n[0]===S.page)?.[1]||'Обзор';$('#app').innerHTML=`<div class="layout"><div id="sidebar-backdrop" class="sidebar-backdrop ${S.menuOpen?'show':''}" data-action="close-menu" aria-hidden="true"></div><aside id="app-sidebar" class="sidebar ${S.menuOpen?'open':''}" aria-label="Навигация по разделам" aria-hidden="${!S.menuOpen}" ${S.menuOpen?'':'inert'}><div class="side-top"><div class="side-title">Отчёт по работе <span>ГООГС СЭОГС</span></div><button class="sidebar-close icon-btn" type="button" data-action="close-menu" title="Закрыть меню" aria-label="Закрыть меню">${ic('x')}</button></div><div class="side-section">Рабочее пространство</div><nav class="nav">${navList()}</nav><div class="side-bottom"><div class="side-note"><div class="note-icon">${ic('sparkle')}</div><b>Всё под контролем</b><p>Работы, табель и отчёты — в одном удобном пространстве команды.</p></div><div class="side-user">${avatarButton(S.user,'avatar','Открыть моё фото профиля')}<div class="meta"><b>${esc(S.user.name)}</b><small>${isAdmin()?'Администратор':'Сотрудник'}</small></div><button title="Выйти" data-action="logout">${ic('logout')}</button></div></div></aside><main class="main"><header class="topbar"><button id="menu-toggle" class="icon-btn mobile-menu" type="button" data-action="menu" title="Открыть меню" aria-label="Открыть меню" aria-controls="app-sidebar" aria-expanded="${S.menuOpen}">${ic('menu')}</button><div class="breadcrumbs">Рабочее пространство <span>/</span> <span>${esc(label)}</span></div>${presenceHTML()}<div class="topbar-right"><span class="top-date">${ic('calendar')} ${new Date(S.today+'T12:00:00').toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric'})}</span><div class="top-divider"></div>${isAdmin()?`<button class="icon-btn" data-modal="password" title="Сменить пароль">${ic('lock')}</button>`:''}${avatarButton(S.user,'avatar avatar-edit-trigger','Открыть моё фото профиля')}</div></header><div class="content"><div id="save-feedback" class="save-feedback ${S.saveNotice?.kind||''}" role="status" ${S.saveNotice?'':'hidden'}><span>${esc(S.saveNotice?.text||'')}</span><button type="button" data-action="save-refresh" ${S.saveNotice?.kind==='conflict'?'':'hidden'}>Обновить данные</button></div>${pageHTML()}</div></main></div><div id="modal-root"></div>`;if(S.modal)renderModal();hydrateAvatars();updateEdgeRunners()}
 function setMenuOpen(open){
  S.menuOpen=!!open;
  const sidebar=$('#app-sidebar'),backdrop=$('#sidebar-backdrop'),trigger=$('#menu-toggle');
@@ -274,6 +285,23 @@ function setMenuOpen(open){
  document.body.classList.toggle('menu-open',S.menuOpen);
  if(S.menuOpen)sidebar.querySelector('.sidebar-close')?.focus();else trigger.focus();
 }
+function sotipbPage(){
+ const runs=S.sotipbHistory?.runs||[],done=S.sotipbResult;
+ return `${head('АДМИНИСТРАТОР / ПРЕОБРАЗОВАНИЕ','СОТИПБ','Загрузите свой «лист 1» — получите исходник и оформленный «свод 1» с объединёнными ячейками.')}
+ <div class="sotipb-panels"><section class="card card-pad"><h3>1. Скачайте болванку</h3><p>Заполняйте строки начиная со второй. Колонки A–O повторяют образец; P–R — необязательные уточнения для свода. В строках одной группы повторяйте архивный номер и адрес.</p><button class="btn secondary" data-action="sotipb-template">${ic('download')} Скачать пустой «лист 1»</button></section>
+ <section class="card card-pad"><h3>2. Загрузите заполненный XLSX</h3><p>До 3 МБ и 5000 заполненных строк. Исходник и результат сохраняются в базе и резервном ZIP, доступ к файлам — только администраторам.</p><label class="btn primary" for="sotipb-file">${ic('download')} Выбрать «лист 1»</label><input type="file" id="sotipb-file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden><p class="sotipb-file-name">${S.sotipbFile?esc(S.sotipbFile.name):'Файл не выбран'}</p><button class="btn primary" data-action="sotipb-convert" ${S.sotipbFile?'':'disabled'}>Составить «свод 1» и сохранить</button></section></div>
+ ${done?`<section class="card card-pad sotipb-result"><h3>Готово: ${done.rows} строк · ${done.groups} групп</h3><p>Свод сформирован и сохранён в истории. Скачайте XLSX с двумя листами: «лист 1» и «свод 1».</p><button class="btn primary" data-action="sotipb-download" data-id="${done.id}" data-kind="result">${ic('download')} Скачать результат</button>${done.warning_count?`<details><summary>Важные замечания (${done.warning_count})</summary><ul>${done.warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></details>`:'<p>Неоднозначных исходных значений не обнаружено.</p>'}</section>`:''}
+ <div class="hint section-spacer">${ic('info')} В присланном образце некоторые числа есть только в готовом своде: например, длины 31,5 и 35 при пустых F10–F11, диаметр 34 при «32ст» в E9. Такие значения нельзя вычислить из исходника. Для точного результата внесите их в уточнения Q/R; без уточнений сайт оставит отсутствующую длину пустой и покажет замечание.</div>
+ <section class="card card-pad sotipb-history"><h3>История преобразований</h3><p>Файлы остаются в D1 и ZIP до удаления администратором. Общая вместимость истории — 12 МБ исходников и результатов; перед удалением скачайте нужные пары.</p>
+ ${runs.length?`<div class="sotipb-history-list">${runs.map(r=>`<div class="sotipb-history-row"><div><b>${esc(r.source_name)}</b><small>${esc(backupDate(r.created_at))} · ${esc(r.uploader_name||'Администратор')} · ${r.row_count} строк · ${r.group_count} групп${r.warnings.length?' · замечания: '+r.warnings.length:''}</small></div><div class="sotipb-history-actions"><button class="btn secondary" data-action="sotipb-download" data-id="${r.id}" data-kind="source">Исходник</button><button class="btn secondary" data-action="sotipb-download" data-id="${r.id}" data-kind="result">Свод</button><button class="btn danger" data-action="sotipb-delete" data-id="${r.id}">Удалить</button></div></div>`).join('')}</div>${S.sotipbHistory?.has_more?'<button class="btn secondary" data-action="sotipb-more">Показать предыдущие</button>':''}`:'<p>Пока ни одной сохранённой пары.</p>'}</section>`;
+}
+function expectedVacation(user,month){
+ const row=S.vacationData?.entries.find(r=>r.user_id===Number(user)&&r.month===Number(month));
+ return row?{start_date:row.start_date,end_date:row.end_date,material_help:row.material_help}:null;
+}
+function expectedEntry(row){return row?{user_id:row.user_id,task_id:row.task_id,work_date:row.work_date,quantity:row.quantity,note:row.note}:null}
+function expectedUser(u){return {name:u.name,username:u.username,role:u.role,active:u.active,password_revision:u.password_revision}}
+function expectedTask(t){return {title:t.title,unit:t.unit,norm:t.norm,category:t.category,active:t.active}}
 function vacationPage(){
  const year=S.vacationYear||Number(S.today.slice(0,4));
  const data=S.vacationData?.year===year?S.vacationData:{people:[],entries:[]};
@@ -292,10 +320,10 @@ function vacationPage(){
  return `${head('КОМАНДА / ПЛАНИРОВАНИЕ','Отпуск','Два листа по месяцам: даты отпусков и отметки материальной помощи.',`${switcher}<button type="button" class="btn secondary" data-action="vacation-print-open">${ic('download')} Печать</button>`)}
  <div class="vacation-intro"><span class="vacation-intro-icon">${ic('calendar')}</span><p><b>План отпусков на ${year} год</b><br>${isAdmin()?'Нажмите на ячейку с датами, чтобы добавить или изменить отпуск. В нижней таблице «+» появится автоматически.':'Даты и материальную помощь меняет только администратор.'}</p></div>
  ${isAdmin()?`<div class="vacation-import"><label class="btn secondary" for="vacation-import-file">${ic('download')} Загрузить исходный XLSX</label><input id="vacation-import-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden><small>Импорт только отсутствующих ячеек ${year} года. Текущие данные не перезаписываются.</small>
- ${importPreview?`<div class="vacation-import-preview"><b>В файле ${importPreview.found} ячеек: новых ${importPreview.new}, уже заполнено ${importPreview.unchanged}.</b><span>Сопоставлены: ${esc(importPreview.matched.join(', ')||'никто')}.</span>${importPreview.unmatched.length?`<strong>Нет сотрудника на сайте: ${esc(importPreview.unmatched.join(', '))}. Добавьте его в «Сотрудники» и загрузите файл повторно.</strong>`:''}<button class="btn primary" type="button" data-action="vacation-import-confirm" ${importPreview.new?'':'disabled'}>Импортировать ${importPreview.new} новых ячеек</button></div>`:''}</div>`:''}
+ ${importPreview?`<div class="vacation-import-preview"><b>В файле ${importPreview.found} ячеек: новых ${importPreview.new}, уже заполнено ${importPreview.unchanged}.</b><span>Проверьте соответствия до подтверждения. Пустой выбор означает, что эта строка не будет импортирована.</span><div class="vacation-import-mapping">${(importPreview.mapping||[]).map(row=>`<label><span>${esc(row.source)} <small>(${esc(row.reason)})</small></span><select data-vacation-map="${esc(row.source)}"><option value="">Не переносить</option>${(S.vacationData?.people||[]).map(person=>`<option value="${person.id}" ${row.user_id===person.id?'selected':''}>${esc(person.name)}</option>`).join('')}</select></label>`).join('')}</div>${importPreview.unmatched.length?`<strong>Требуют выбора сотрудника: ${esc(importPreview.unmatched.join(', '))}.</strong>`:''}<button class="btn primary" type="button" data-action="vacation-import-confirm" ${importPreview.new?'':'disabled'}>Импортировать ${importPreview.new} новых ячеек</button></div>`:''}</div>`:''}
  <div class="vacation-print-area"><div class="vacation-print-title"><h2>Отпуск · ${year}</h2><span>Годовой план команды</span></div>${table(false)}${table(true)}</div>${printPrompt}`;
 }
-function pageHTML(){switch(S.page){case 'entries':return entriesPage();case 'chat':return chatPage();case 'vacation':return vacationPage();case 'report':return reportPage();case 'attendance':return attendancePage();case 'team':return teamPage();case 'catalog':return catalogPage();case 'activity':return activityPage();case 'backup':return isAdmin()?backupPage():overviewPage();case 'prank':return isAdmin()?prankPage():overviewPage();default:return overviewPage()}}
+function pageHTML(){switch(S.page){case 'entries':return entriesPage();case 'chat':return chatPage();case 'vacation':return vacationPage();case 'sotipb':return isAdmin()?sotipbPage():overviewPage();case 'report':return reportPage();case 'attendance':return attendancePage();case 'team':return teamPage();case 'catalog':return catalogPage();case 'activity':return activityPage();case 'backup':return isAdmin()?backupPage():overviewPage();case 'prank':return isAdmin()?prankPage():overviewPage();default:return overviewPage()}}
 function monthControl(){return `<div class="month-switch"><button data-action="prev-month" title="Предыдущий месяц">${ic('chevLeft')}</button><strong>${monthName(S.month)}</strong><button data-action="next-month" title="Следующий месяц">${ic('chevRight')}</button></div>`}
 function head(eyebrow,title,subtitle,actions=''){return `<div class="page-head"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p class="subheading">${subtitle}</p></div><div class="actions">${actions}</div></div>`}
 function filteredEntries(){return S.data.entries.filter(e=>(!S.userFilter||String(e.user_id)===S.userFilter)&&(!S.categoryFilter||S.data.tasks.find(t=>t.id===e.task_id)?.category===S.categoryFilter)&&(!S.search||(`${S.data.tasks.find(t=>t.id===e.task_id)?.title||''} ${S.data.users.find(u=>u.id===e.user_id)?.name||''} ${e.note||''}`).toLowerCase().includes(S.search.toLowerCase())))}
@@ -376,9 +404,17 @@ function entriesPage(){
 // Переписки видны только участникам; сервер отдельно проверяет доступ при каждом запросе.
 let chatTimer=null,chatBusy=false;
 function chatRoomsHTML(){
- const people=S.chatData?.users||[];
- const group=`<button type="button" class="chat-room ${S.chatRoom==='general'?'selected':''}" data-action="chat-room" data-room="general"><span class="chat-room-avatar group">${ic('users')}</span><span class="chat-room-meta"><span class="chat-room-name"><b>Общий чат</b>${unreadBadge('general')}</span><small>Вся команда</small></span></button>`;
- return group+people.map(u=>`<div class="chat-room chat-room-person ${S.chatRoom===String(u.id)?'selected':''}">${avatarButton(u,'chat-room-avatar','Открыть фото профиля')}<button type="button" class="chat-room-open" data-action="chat-room" data-room="${u.id}"><span class="chat-room-meta"><span class="chat-room-name"><b>${esc(u.name)}</b>${unreadBadge(String(u.id))}</span><small>${u.role==='admin'?'Администратор':'Сотрудник'}${S.presencePeople.some(p=>p.id===u.id)?' · в сети':''}</small></span></button></div>`).join('');
+ const people=S.chatData?.users||[],pinned=new Set(S.chatPins),activity=S.chatOrder||{};
+ const rooms=[{key:'general',name:'Общий чат',group:true},...people.map(u=>({...u,key:String(u.id)}))];
+ const key=r=>r.group?'general':'dm:'+r.key;
+ rooms.sort((a,b)=>Number(pinned.has(key(b)))-Number(pinned.has(key(a)))||
+    Number(activity[key(b)]||0)-Number(activity[key(a)]||0)||a.name.localeCompare(b.name,'ru'));
+ return rooms.map(u=>{
+  const room=u.key,pin=pinned.has(key(u));
+  const avatar=u.group?`<span class="chat-room-avatar group">${ic('users')}</span>`:avatarButton(u,'chat-room-avatar','Открыть фото профиля');
+  const label=u.group?'Вся команда':`${u.role==='admin'?'Администратор':'Сотрудник'}${S.presencePeople.some(p=>p.id===u.id)?' · в сети':''}`;
+  return `<div class="chat-room ${u.group?'chat-room-general':'chat-room-person'} ${S.chatRoom===room?'selected':''}">${avatar}<button type="button" class="chat-room-open" data-action="chat-room" data-room="${esc(room)}"><span class="chat-room-meta"><span class="chat-room-name"><b>${esc(u.name)}</b>${unreadBadge(room)}</span><small>${esc(label)}</small></span></button><button type="button" class="chat-pin ${pin?'is-pinned':''}" data-action="chat-pin" data-room="${esc(room)}" aria-label="${pin?'Открепить':'Закрепить'} чат ${esc(u.name)}" title="${pin?'Открепить':'Закрепить'}">${pin?'★':'☆'}</button></div>`;
+ }).join('');
 }
 function chatMessagesHTML(){
  const messages=S.chatData?.messages||[];
@@ -444,9 +480,11 @@ async function pollChatStatus(){
   if(!S.user)return;
   chatStatusCursor=status.cursor;
   S.unread={direct:status.direct||{},general:Number(status.general)||0};
+  S.chatOrder=status.rooms||{};S.chatPins=status.pinned||[];
   updateUnreadUI();
+  if(S.page==='chat'){const rooms=$('#chat-rooms-list');if(rooms){rooms.innerHTML=chatRoomsHTML();hydrateAvatars()}}
   // The first status request shows counts but never replays old messages as popups.
-  for(const message of status.notices)notify('Вам пришло новое сообщение от „'+message.sender_name+'“');
+  for(const message of status.notices)notify('Пришло новое сообщение от: '+message.sender_name);
  }finally{chatStatusBusy=false}
 }
 function stopChatPolling(){if(chatTimer)clearInterval(chatTimer);chatTimer=null;S.chatData=null}
@@ -485,16 +523,22 @@ function attendancePage(){
  <div class="hint section-spacer">${ic('info')} По умолчанию часы являются плановыми, а не подтверждением фактического выхода. ${isAdmin()?'Для работы в выходной отметьте сотруднику «На работе» и при необходимости задайте часы.':'Изменить табель может только администратор.'} Праздники автоматически не исключаются.</div>`
 }
 
-const backupNames={vacation_schedule:'Отпуск',users:'Учётные записи',tasks:'Виды работ',entries:'Записи работ',cell_comments:'Комментарии',attendance:'Отметки табеля',daily_hours:'Общие часы',personal_hours:'Личные часы',activity:'События журнала',chat_messages:'Сообщения чата',chat_reads:'Отметки прочтения',chat_themes:'Оформление бесед'};
+const backupNames={vacation_schedule:'Отпуск',users:'Учётные записи',tasks:'Виды работ',entries:'Записи работ',cell_comments:'Комментарии',attendance:'Отметки табеля',daily_hours:'Общие часы',personal_hours:'Личные часы',activity:'События журнала',chat_messages:'Сообщения чата',chat_reads:'Отметки прочтения',chat_themes:'Оформление бесед',chat_pins:'Личные закрепления чатов',sotipb_runs:'Пары файлов СОТИПБ',sotipb_parts:'Части файлов СОТИПБ'};
 function backupDate(iso){return iso?new Date(iso.replace(' ','T').replace(/(\d{2}:\d{2}:\d{2})$/,'$1Z')).toLocaleString('ru-RU',{timeZone:'Europe/Minsk'}):'—'}
 function backupPage(){
  const status=S.backupStatus,now=status?.current,view=S.backupPreview;
+ const google=status?.monitor?.find(x=>x.source==='google'),manual=status?.monitor?.find(x=>x.source==='manual');
+ const minskHour=Number(new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Minsk',hour:'2-digit',hourCycle:'h23'}).format(new Date()));
+ const stale=google?.last_check&&minskHour>=8&&minskHour<=17&&Date.now()-Date.parse(google.last_check.replace(' ','T')+'Z')>2*3600000;
+ const googleText=!google?'Нет подтверждений от Google Диска. Обновите Apps Script и запустите testBackupNow.':google.state==='error'?'Ошибка проверки: '+(google.detail||'откройте Apps Script → Выполнения'):stale?'Нет свежего подтверждения за последние 2 часа. Проверьте Apps Script.':google.state==='unchanged'?'Проверено, новых изменений не было.':'Копия подтверждена скриптом.';
  const latest=(info)=>`<div class="backup-info-grid"><div><small>Самая ранняя работа</small><b>${displayDate(info?.first_work_date)||'—'}</b></div><div><small>Последняя работа</small><b>${displayDate(info?.last_work_date)||'—'}</b></div><div><small>Последнее действие</small><b>${backupDate(info?.last_activity)}</b></div><div><small>Администраторов / сотрудников</small><b>${info?.active_admins??'—'} / ${info?.staff??'—'}</b></div></div>`;
- return `${head('АДМИНИСТРАТОР / ДАННЫЕ','Резервные копии','Сохраните данные, сравните старый архив с текущей базой и при необходимости восстановите.',`<button class="btn secondary" data-action="backup-refresh">${ic('history')} Обновить</button>`)}
+ return `${head('АДМИНИСТРАТОР / ДАННЫЕ','Резервные копии','Сохраните данные, сравните старый архив с текущей базой и при необходимости восстановите.',`<button class="btn secondary" data-action="backup-refresh">${ic('history')} Обновить</button><button class="btn secondary" data-action="deploy-check">${ic('check')} Проверить публикацию</button>`)}
+ ${S.deployCheck?`<section class="backup-deploy-check ${S.deployCheck.ok?'ready':'warn'}"><b>${S.deployCheck.ok?'Сайт готов к работе':'Нужна проверка публикации'} · версия ${esc(S.deployCheck.build)}</b><span>Render: ${S.deployCheck.checks.render?'✓':'✕'} · интерфейс: ${S.deployCheck.checks.interface?'✓':'✕'} · база: ${S.deployCheck.checks.database?'✓':'✕'} · таблицы бэкапа: ${S.deployCheck.checks.backup_tables?'✓':'✕'}</span><small>${esc(S.deployCheck.detail)}${S.deployCheck.missing_files?.length?' · отсутствуют файлы: '+esc(S.deployCheck.missing_files.join(', ')):''}</small></section>`:''}
+ <div class="backup-monitor-grid"><section class="backup-monitor-card"><small>Ручной ZIP</small><b>${manual?.last_saved?backupDate(manual.last_saved):'Ещё не создавался'}</b><span>${manual?.file_name?esc(manual.file_name)+' · создан сайтом, проверьте загрузку на компьютер':'Скачайте ZIP для независимой копии'}</span></section><section class="backup-monitor-card ${google?.state==='error'||stale?'warn':''}"><small>Google Диск · отчёт скрипта</small><b>${google?.last_saved?backupDate(google.last_saved):'Подтверждённых файлов пока нет'}</b><span>${esc(googleText)}</span>${google?.last_check?`<span>Последняя проверка: ${esc(backupDate(google.last_check))}</span>`:''}${google?.file_name?`<span>${esc(google.file_name)} · ${Math.round(google.file_size/1024)} КБ</span>`:''}</section></div>
  <div class="backup-grid"><section class="card card-pad"><div class="card-head"><div><h3>Текущая база</h3><p>Скачайте копию на свой компьютер и храните её отдельно от сайта.</p></div></div>
- ${now?latest(now):'<p>Загрузка данных…</p>'}<div class="backup-key-counts"><b>${now?.counts?.entries??'—'}</b> записей работ · <b>${now?.counts?.tasks??'—'}</b> видов работ · <b>${now?.counts?.users??'—'}</b> учётных записей</div>
+ ${now?latest(now):'<p>Загрузка данных…</p>'}<div class="backup-key-counts"><b>${now?.counts?.entries??'—'}</b> записей работ · <b>${now?.counts?.tasks??'—'}</b> видов работ · <b>${now?.counts?.users??'—'}</b> учётных записей<br><b>${now?.counts?.vacation_schedule??'—'}</b> отпусков · <b>${now?.counts?.chat_messages??'—'}</b> сообщений · <b>${now?.counts?.chat_themes??'—'}</b> рамок бесед · <b>${now?.counts?.sotipb_runs??'—'}</b> пар СОТИПБ</div>
  <button type="button" class="btn primary" data-action="backup-download">${ic('download')} Скачать резервную копию ZIP</button>
- <p class="backup-subnote">Архив содержит сообщения и хеши паролей, но не содержит аватаров и действующих сеансов. После восстановления аватары понадобится загрузить заново. Храните файл в безопасном месте.</p></section>
+ <p class="backup-subnote">В ZIP входят отпуска и +М, данные графиков (работы, нормы, табель, часы), сообщения и сохранённое оформление чата, исходные файлы и результаты СОТИПБ, пользователи и права. Аватары по вашему выбору исключены; временные черновики и настройки экрана тоже не входят. Храните архив в безопасном месте: он содержит хеши паролей.</p></section>
  <section class="card card-pad"><div class="card-head"><div><h3>Загрузить старую копию</h3><p>Перед восстановлением сначала просмотрите различия.</p></div></div>
  <label class="backup-file-label" for="backup-file">${ic('download')} ${esc(S.backupFile?.name||'Выбрать ZIP-архив Forma')}</label><input type="file" id="backup-file" accept=".zip,application/zip"><div class="backup-buttons"><button type="button" class="btn secondary" data-action="backup-inspect" ${S.backupFile?'':'disabled'}>Сравнить с текущей базой</button></div>
  <p class="backup-subnote">Максимум 25 МБ. Данные не изменятся, пока вы не подтвердите восстановление.</p></section></div>
@@ -596,55 +640,58 @@ function renderModal(){let root=$('#modal-root');if(!root)return;let m=S.modal;i
  }else if(m.type==='password'){
  html=modalFrame('Сменить пароль','Новый пароль будет нужен при следующем входе.',`${field('old','Текущий пароль','password','','required autocomplete="current-password"')}${field('new','Новый пароль','password','','minlength="8" required autocomplete="new-password"')}`,'Сменить пароль');
  }root.innerHTML=html;if(m.type==='avatar')hydrateAvatars();root.querySelector('input,select,textarea')?.focus()}
-async function navigate(page){const wasMenuOpen=S.menuOpen;if(wasMenuOpen)setMenuOpen(false);if(page!=='chat'){stopChatPolling();S.chatDesignOpen=null;S.roomDraft=null}S.modal=null;S.page=page;S.search='';S.userFilter='';S.categoryFilter='';if(page==='report'&&isAdmin())S.report=await api('/api/report?month='+S.month);if(page==='activity'&&isAdmin())S.logs=await api('/api/logs');if(page==='backup'&&isAdmin())S.backupStatus=await api('/api/backup/status');if(page==='prank'&&isAdmin())S.prankOnline=(await api('/api/prank/online')).user_ids;if(page==='chat')await fetchChat(true);if(page==='vacation'){S.vacationYear??=Number(S.today.slice(0,4));S.vacationData=await api('/api/vacation?year='+S.vacationYear)}render();if(page==='chat'){startChatPolling();const box=$('#chat-messages');if(box)box.scrollTop=box.scrollHeight}if(wasMenuOpen)$('#menu-toggle')?.focus({preventScroll:true});window.scrollTo({top:0,behavior:'smooth'})}
+async function navigate(page){const wasMenuOpen=S.menuOpen;if(wasMenuOpen)setMenuOpen(false);if(page!=='chat'){stopChatPolling();S.chatDesignOpen=null;S.roomDraft=null}S.modal=null;S.page=page;S.search='';S.userFilter='';S.categoryFilter='';if(page==='report'&&isAdmin())S.report=await api('/api/report?month='+S.month);if(page==='activity'&&isAdmin())S.logs=await api('/api/logs');if(page==='backup'&&isAdmin())S.backupStatus=await api('/api/backup/status');if(page==='sotipb'&&isAdmin())S.sotipbHistory=await api('/api/sotipb/history');if(page==='prank'&&isAdmin())S.prankOnline=(await api('/api/prank/online')).user_ids;if(page==='chat')await fetchChat(true);if(page==='vacation'){S.vacationYear??=Number(S.today.slice(0,4));S.vacationData=await api('/api/vacation?year='+S.vacationYear)}render();if(page==='chat'){startChatPolling();const box=$('#chat-messages');if(box)box.scrollTop=box.scrollHeight}if(wasMenuOpen)$('#menu-toggle')?.focus({preventScroll:true});window.scrollTo({top:0,behavior:'smooth'})}
 function closeModal(){S.modal=null;$('#modal-root')?.replaceChildren()}
 async function saveModal(form){const m=S.modal,fd=new FormData(form),data=Object.fromEntries(fd.entries());const sheetX=$('.work-sheet-scroll')?.scrollLeft||0;try{form.querySelector('button[type=submit]').disabled=true;if(m.type==='avatar'){
    const file=data.file,url=String(data.url||'').trim();
    if(file?.size&&url&&url!==S.user.avatar_url)throw Error('Выберите только один способ: файл или ссылку');
    if(!file?.size&&!url)throw Error('Выберите файл или укажите HTTPS-ссылку');
-   const payload=file?.size?{image_b64:await compressedAvatar(file)}:{url};
+   const payload=file?.size?{image_b64:await compressedAvatar(file)}:{url};payload.expected_revision=S.user.avatar_revision||0;
    await api('/api/avatar','POST',payload);clearAvatarCache();notify('Аватар сохранён');
  }else if(m.type==='vacation'){
-  await api('/api/vacation/save','POST',{user_id:Number(m.user),year:S.vacationYear,month:Number(m.month),start_date:data.start_date,end_date:data.end_date});
+  await api('/api/vacation/save','POST',{user_id:Number(m.user),year:S.vacationYear,month:Number(m.month),start_date:data.start_date,end_date:data.end_date,expected:expectedVacation(m.user,m.month)});
   notify('Даты отпуска сохранены');
  }else if(m.type==='vacation-help'){
   const row=S.vacationData?.entries.find(v=>v.user_id===Number(m.user)&&v.month===Number(m.month));
   if(!row)throw Error('Отпуск не найден');
-  await api('/api/vacation/help','POST',{user_id:Number(m.user),year:S.vacationYear,month:Number(m.month),material_help:!Boolean(row.material_help)});
+  await api('/api/vacation/help','POST',{user_id:Number(m.user),year:S.vacationYear,month:Number(m.month),material_help:!Boolean(row.material_help),expected:expectedVacation(m.user,m.month)});
   notify(row.material_help?'Материальная помощь убрана':'Материальная помощь добавлена');
  }else if(m.type==='entry'){
-  const payload={...data,task_id:Number(data.task_id),user_id:Number(data.user_id||S.user.id),quantity:Number(data.quantity)};
+  const prior=S.data.entries.find(r=>r.id===Number(m.id));
+  const payload={...data,task_id:Number(data.task_id),user_id:Number(data.user_id||S.user.id),quantity:Number(data.quantity),expected:m.id?expectedEntry(prior):null};
   if(m.id)await api('/api/entries/'+m.id,'PATCH',payload);else await api('/api/entries','POST',payload);
   notify('Запись о работе сохранена');
  }else if(m.type==='cell-comment'){
-   await api('/api/comments','POST',{user_id:Number(m.user),task_id:Number(m.task),date:m.day,comment:data.comment||''});
+   const prior=S.data.comments?.find(r=>r.user_id===Number(m.user)&&r.task_id===Number(m.task)&&r.work_date===m.day);
+   await api('/api/comments','POST',{user_id:Number(m.user),task_id:Number(m.task),date:m.day,comment:data.comment||'',expected:prior?{body:prior.body}:null});
    S.sheetSaved='Комментарий сохранён';
  }else if(m.type==='attendance'){
    const uid=Number(m.user),own=S.data.personal_hours?.find(h=>h.user_id===uid&&h.day===m.day);
    if(isAdmin()&&data.hours!==undefined){
      const typed=String(data.hours).trim();
      if(typed!==''&&(!Number.isFinite(Number(typed))||Number(typed)<0||Number(typed)>24))throw Error('Укажите от 0 до 24 часов');
-     if(typed!==''&&(!own||Number(own.hours)!==Number(typed)))await api('/api/hours','POST',{user_id:uid,date:m.day,hours:Number(typed)});
-     if(typed===''&&own)await api('/api/hours','POST',{user_id:uid,date:m.day,hours:null});
+     if(typed!==''&&(!own||Number(own.hours)!==Number(typed)))await api('/api/hours','POST',{user_id:uid,date:m.day,hours:Number(typed),expected:own?{hours:own.hours}:null});
+     if(typed===''&&own)await api('/api/hours','POST',{user_id:uid,date:m.day,hours:null,expected:own?{hours:own.hours}:null});
    }
-   await api('/api/attendance','POST',{user_id:uid,date:m.day,status:S.attendanceChoice,reason:data.reason||''});
+   await api('/api/attendance','POST',{user_id:uid,date:m.day,status:S.attendanceChoice,reason:data.reason||'',expected:(S.data.attendance.find(r=>r.user_id===uid&&r.day===m.day)||null)?{status:S.data.attendance.find(r=>r.user_id===uid&&r.day===m.day).status,reason:S.data.attendance.find(r=>r.user_id===uid&&r.day===m.day).reason}:null});
    notify('Табель и часы обновлены')
  }
  else if(m.type==='global-hours'){
    if(String(data.hours).trim()==='')throw Error('Введите количество часов');
-   await api('/api/hours','POST',{date:data.date,hours:Number(data.hours)});
+   const prior=S.data.daily_hours.find(r=>r.day===data.date);
+   await api('/api/hours','POST',{date:data.date,hours:Number(data.hours),expected:prior?{hours:prior.hours}:null});
    notify('Часы для всей команды обновлены')
  }
  else if(m.type==='user'){await api('/api/users','POST',data);notify('Сотрудник добавлен. Передайте ему данные для входа.')}
  else if(m.type==='edit-user'){
    if(!data.password)delete data.password;
    const ownLoginChanged=Number(m.id)===S.user.id&&data.username.trim().toLowerCase()!==S.user.username.toLowerCase();
-   await api('/api/users/'+m.id,'PATCH',data);
+   await api('/api/users/'+m.id,'PATCH',{...data,expected:expectedUser(S.data.users.find(u=>u.id===Number(m.id)))});
    if(ownLoginChanged){setToken('');stopPrankPolling();stopChatPolling();clearPrankEffect();S.modal=null;S.user=null;S.data=null;showLogin();notify('Логин изменён. Войдите заново с новым логином и прежним паролем.');return}
    notify('Данные сотрудника обновлены');
  }
  else if(m.type==='task'){await api('/api/tasks','POST',{...data,norm:Number(data.norm)});notify('Работа добавлена для всей команды')}
- else if(m.type==='edit-task'){await api('/api/tasks/'+m.id,'PATCH',{...data,norm:Number(data.norm)});notify('Работа обновлена')}
+ else if(m.type==='edit-task'){await api('/api/tasks/'+m.id,'PATCH',{...data,norm:Number(data.norm),expected:expectedTask(S.data.tasks.find(t=>t.id===Number(m.id)))});notify('Работа обновлена')}
  else if(m.type==='password'){await api('/api/password','POST',data);notify('Пароль изменён')}
  closeModal();await load();if(S.page==='entries'&&$('.work-sheet-scroll'))$('.work-sheet-scroll').scrollLeft=sheetX
  }catch(e){const err=$('#form-error');if(err)err.textContent=e.message;form.querySelector('button[type=submit]').disabled=false}}
@@ -664,9 +711,9 @@ async function saveGridCell(input){
  const scrollX=$('.work-sheet-scroll')?.scrollLeft||0,scrollY=window.scrollY;
  input.dataset.saving='true';input.classList.add('saving');
  try{
-   if(empty){await api('/api/entries/'+existing.id,'DELETE')}
+   if(empty){await api('/api/entries/'+existing.id,'DELETE',{expected:expectedEntry(existing)})}
    else{
-     const payload={user_id:uid,task_id:tid,date:day,quantity,note:sheetComment(uid,tid,day)};
+     const payload={user_id:uid,task_id:tid,date:day,quantity,note:sheetComment(uid,tid,day),expected:existing?{quantity:existing.quantity,note:existing.note}:null};
      if(existing)await api('/api/entries/'+existing.id,'PATCH',payload);
      else await api('/api/entries','POST',payload)
    }
@@ -849,7 +896,7 @@ document.addEventListener('click',async e=>{if(S.presenceOpen&&!e.target.closest
    if(action==='vacation-prev'||action==='vacation-next'){
     const next=S.vacationYear+(action==='vacation-next'?1:-1);
     if(next<2020||next>Number(S.today.slice(0,4))+10)return;
-    S.vacationYear=next;S.vacationImportPreview=null;S.vacationFile=null;
+    S.vacationYear=next;S.vacationImportPreview=null;S.vacationFile=null;S.vacationOverrides={};
     S.vacationData=await api('/api/vacation?year='+next);render();return
    }
    if(action==='vacation-print-open'){S.vacationPrintOpen=true;render();$('.vacation-print-dialog .btn')?.focus();return}
@@ -865,14 +912,15 @@ document.addEventListener('click',async e=>{if(S.presenceOpen&&!e.target.closest
    }
    if(action==='vacation-clear'){
     if(!S.modal||!confirm('Удалить даты отпуска и отметку материальной помощи?'))return;
-    await api('/api/vacation/save','POST',{user_id:Number(S.modal.user),year:S.vacationYear,month:Number(S.modal.month),start_date:'',end_date:''});
+    await api('/api/vacation/save','POST',{user_id:Number(S.modal.user),year:S.vacationYear,month:Number(S.modal.month),start_date:'',end_date:'',expected:expectedVacation(S.modal.user,S.modal.month)});
     closeModal();await load();notify('Период удалён');return
    }
    if(action==='vacation-import-confirm'){
     if(!S.vacationFile||!S.vacationImportPreview||S.vacationImportPreview.year!==S.vacationYear)return;
     btn.disabled=true;
-    const response=await backupRequest('/api/vacation/import?year='+S.vacationYear+'&preview=0','POST',S.vacationFile);
+    const response=await backupRequest('/api/vacation/import?year='+S.vacationYear+'&preview=0&snapshot='+encodeURIComponent(S.vacationImportPreview.snapshot)+'&mapping='+encodeURIComponent(JSON.stringify(S.vacationOverrides)),'POST',S.vacationFile);
     const result=await response.json();S.vacationImportPreview=null;S.vacationFile=null;
+    setSaveNotice('Импорт завершён: добавлено '+result.new+' ячеек, ранее заполнено '+result.unchanged,'ok');
     await load();notify('Добавлено '+result.new+' ячеек отпуска');return
    }
   }catch(err){notify(err.message,true);btn.disabled=false}return
@@ -887,16 +935,22 @@ document.addEventListener('click',async e=>{if(S.presenceOpen&&!e.target.closest
   closeAvatarPreview(false);S.modal={type:'avatar'};renderModal();return
  }
  if(btn.dataset.modal){S.modal={type:btn.dataset.modal,id:btn.dataset.id,user:btn.dataset.user,task:btn.dataset.task,day:btn.dataset.day};renderModal();return}if(btn.dataset.status){S.attendanceChoice=btn.dataset.status;document.querySelectorAll('.status-choice').forEach(b=>b.classList.toggle('selected',b===btn));$('#reason-wrap').style.display=S.attendanceChoice==='absent'?'block':'none';const reason=$('#reason-wrap input');reason.required=S.attendanceChoice==='absent';return}
- if(btn.dataset.action==='avatar-remove'){if(!confirm('Удалить текущий аватар?'))return;try{await api('/api/avatar','POST',{remove:true});clearAvatarCache();closeModal();await load();notify('Аватар удалён')}catch(err){notify(err.message,true)}return}
+ if(btn.dataset.action==='avatar-remove'){if(!confirm('Удалить текущий аватар?'))return;try{await api('/api/avatar','POST',{remove:true,expected_revision:S.user.avatar_revision||0});clearAvatarCache();closeModal();await load();notify('Аватар удалён')}catch(err){notify(err.message,true)}return}
  if(btn.dataset.action==='chat-design-message'){toggleChatEditor('message');return}
  if(btn.dataset.action==='chat-design-room'){toggleChatEditor('room');return}
  if(btn.dataset.action==='chat-style-reset'){if(S.chatDesignOpen==='room')S.roomDraft={};else S.messageStyle={};refreshChatEditor();return}
  if(btn.dataset.action==='chat-style-save-room'){
   const room=S.chatRoom;btn.disabled=true;
-  try{const result=await api('/api/chat/theme','POST',{room,style:normalizedStyle(S.roomDraft)});
-   if(S.chatRoom===room&&S.chatData){S.chatData.theme=result.theme;applyRoomTheme();S.chatDesignOpen=null;S.roomDraft=null;$('#chat-style-editor')?.remove()}
+  try{const result=await api('/api/chat/theme','POST',{room,style:normalizedStyle(S.roomDraft),expected:S.chatThemeExpected??{}});
+   if(S.chatRoom===room&&S.chatData){S.chatData.theme=result.theme;applyRoomTheme();S.chatDesignOpen=null;S.roomDraft=null;S.chatThemeExpected=null;$('#chat-style-editor')?.remove()}
    notify('Оформление беседы обновлено для всех участников');
   }catch(err){notify(err.message,true);btn.disabled=false}return
+ }
+ if(btn.dataset.action==='chat-pin'){
+  const room=btn.dataset.room,pinned=!S.chatPins.includes(room==='general'?'general':'dm:'+room);
+  try{await api('/api/chat/pin','POST',{room,pinned,expected_pinned:!pinned});S.chatPins=pinned?[...S.chatPins,room==='general'?'general':'dm:'+room]:S.chatPins.filter(key=>key!==(room==='general'?'general':'dm:'+room));
+   const list=$('#chat-rooms-list');if(list){list.innerHTML=chatRoomsHTML();hydrateAvatars()}notify(pinned?'Чат закреплён':'Чат откреплён')}
+  catch(err){notify(err.message,true)}return
  }
  if(btn.dataset.action==='chat-room'){if(S.chatRoom===btn.dataset.room)return;S.chatRoom=btn.dataset.room;S.chatData=null;S.chatDesignOpen=null;S.roomDraft=null;try{await fetchChat(true);render();const box=$('#chat-messages');if(box)box.scrollTop=box.scrollHeight}catch(err){notify(err.message,true)}return}
  if(btn.dataset.action==='chat-older'){const data=S.chatData,oldest=data?.messages[0]?.id;if(!data?.hasMore||!oldest)return;const box=$('#chat-messages'),height=box.scrollHeight,top=box.scrollTop;btn.disabled=true;try{const result=await api('/api/chat?room='+encodeURIComponent(data.room)+'&before='+oldest);if(S.chatRoom!==data.room||!S.chatData)return;S.chatData.messages=[...result.messages,...S.chatData.messages];S.chatData.hasMore=result.has_more;updateChatView();box.scrollTop=box.scrollHeight-height+top}catch(err){notify(err.message,true);btn.disabled=false}return}
@@ -913,11 +967,38 @@ document.addEventListener('click',async e=>{if(S.presenceOpen&&!e.target.closest
  try{switch(btn.dataset.action){case 'prev-month':case 'next-month':{let [y,m]=S.month.split('-').map(Number);m+=btn.dataset.action==='prev-month'?-1:1;if(m<1){m=12;y--}if(m>12){m=1;y++}if(y<2020||y>Number(S.today.slice(0,4))+1)return;S.month=`${y}-${String(m).padStart(2,'0')}`;await load();break}
  case 'logout':await api('/api/logout','POST');setToken('');S.user=null;S.data=null;stopPrankPolling();stopChatPolling();clearPrankEffect();showLogin();break;
  case 'refresh':await load();notify('Данные обновлены');break;
+ case 'save-refresh':S.saveNotice=null;await load();notify('Данные обновлены. Проверьте новое значение.');break;
+ case 'sotipb-template':await saveBackupBlob(await backupRequest('/api/sotipb/template'),'СОТИПБ-болванка.xlsx');notify('Болванка скачивается');break;
+ case 'sotipb-convert':{
+  const file=S.sotipbFile;if(!file)throw Error('Выберите XLSX');btn.disabled=true;
+  try{
+   S.sotipbResult=await (await backupRequest('/api/sotipb/convert','POST',file,{'X-Forma-File-Name':encodeURIComponent(file.name)})).json();
+   S.sotipbHistory=await api('/api/sotipb/history');S.sotipbFile=null;
+   setSaveNotice('СОТИПБ: преобразовано '+S.sotipbResult.rows+' строк и сохранено в истории','ok');render();
+   notify('Результат готов. Скачайте XLSX из блока «Готово».');
+  }finally{btn.disabled=false}break
+ }
+ case 'sotipb-download':{
+  const id=Number(btn.dataset.id),kind=btn.dataset.kind,run=S.sotipbHistory?.runs.find(r=>r.id===id);
+  if(!run||!['source','result'].includes(kind))throw Error('Файл не найден. Обновите историю.');
+  await saveBackupBlob(await backupRequest('/api/sotipb/file?id='+id+'&kind='+kind),
+    kind==='source'?run.source_name:'СОТИПБ-свод-'+id+'.xlsx');notify('Файл скачивается');break
+ }
+ case 'sotipb-more':{
+  const page=await api('/api/sotipb/history?before='+S.sotipbHistory.next);
+  S.sotipbHistory={...page,runs:[...S.sotipbHistory.runs,...page.runs]};render();break
+ }
+ case 'sotipb-delete':{
+  const id=Number(btn.dataset.id);if(!confirm('Удалить исходный файл и результат из истории СОТИПБ? Сначала скачайте их.'))return;
+  await api('/api/sotipb/history/'+id,'DELETE');S.sotipbHistory=await api('/api/sotipb/history');
+  if(S.sotipbResult?.id===id)S.sotipbResult=null;render();notify('Пара файлов удалена');break
+ }
+ case 'deploy-check':S.deployCheck=await api('/api/deploy/check');render();notify(S.deployCheck.ok?'Проверка пройдена':'Обнаружены проблемы публикации',!S.deployCheck.ok);break;
  case 'backup-refresh':S.backupStatus=await api('/api/backup/status');S.backupPreview=null;render();break;
  case 'backup-download':{
   const response=await backupRequest('/api/backup/download');
   await saveBackupBlob(response,'forma-backup-'+new Date().toISOString().slice(0,10)+'.zip');
-  notify('Резервная копия скачивается');break
+  S.backupStatus=await api('/api/backup/status');render();notify('ZIP сформирован. Проверьте, что файл сохранился на вашем компьютере.');break
  }
  case 'backup-safety':{
   const name=btn.dataset.name;
@@ -947,22 +1028,35 @@ document.addEventListener('click',async e=>{if(S.presenceOpen&&!e.target.closest
  case 'reset-global-hours':{
    const day=$('#field-date')?.value;
    if(!day)throw Error('Укажите дату');
-   await api('/api/hours','POST',{date:day,hours:null});
+   await api('/api/hours','POST',{date:day,hours:null,expected:(S.data.daily_hours.find(r=>r.day===day)||null)?{hours:S.data.daily_hours.find(r=>r.day===day).hours}:null});
    closeModal();await load();notify('На дату возвращена норма по графику');break
  }
  case 'export':{const response=await fetch(authedPath('/api/export?month='+S.month),{credentials:'same-origin',headers:authToken?{'X-Forma-Session':authToken}:{}});if(!response.ok){const err=await response.json();throw Error(err.error||'Ошибка экспорта')}const blob=await response.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='forma-report-'+S.month+'.xlsx';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);notify('Excel-отчёт скачивается');break}
- case 'delete-entry':{if(!confirm('Удалить эту запись? Действие попадёт в журнал.'))return;await api('/api/entries/'+btn.dataset.id,'DELETE');notify('Запись удалена');await load();break}
- case 'toggle-user':{let u=S.data.users.find(u=>u.id===Number(btn.dataset.id));if(!confirm(`${u.active?'Отключить':'Включить'} сотрудника ${u.name}?`))return;await api('/api/users/'+u.id,'PATCH',{active:!u.active});notify('Доступ сотрудника обновлён');await load();break}
- case 'toggle-task':{let t=S.data.tasks.find(t=>t.id===Number(btn.dataset.id));if(!confirm(`${t.active?'Архивировать':'Восстановить'} работу «${t.title}»?`))return;await api('/api/tasks/'+t.id,'PATCH',{active:!t.active});notify('Каталог обновлён');await load();break}
+ case 'delete-entry':{if(!confirm('Удалить эту запись? Действие попадёт в журнал.'))return;await api('/api/entries/'+btn.dataset.id,'DELETE',{expected:expectedEntry(S.data.entries.find(r=>r.id===Number(btn.dataset.id)))});notify('Запись удалена');await load();break}
+ case 'toggle-user':{let u=S.data.users.find(u=>u.id===Number(btn.dataset.id));if(!confirm(`${u.active?'Отключить':'Включить'} сотрудника ${u.name}?`))return;await api('/api/users/'+u.id,'PATCH',{active:!u.active,expected:expectedUser(u)});notify('Доступ сотрудника обновлён');await load();break}
+ case 'toggle-task':{let t=S.data.tasks.find(t=>t.id===Number(btn.dataset.id));if(!confirm(`${t.active?'Архивировать':'Восстановить'} работу «${t.title}»?`))return;await api('/api/tasks/'+t.id,'PATCH',{active:!t.active,expected:expectedTask(t)});notify('Каталог обновлён');await load();break}
  }}catch(err){notify(err.message,true)}});
 document.addEventListener('input',e=>{if(e.target.dataset.styleField){setChatStyleField(e.target);return}if(e.target.id==='backup-confirm'){$('[data-action="backup-restore"]').disabled=e.target.value.trim()!=='ВОССТАНОВИТЬ';return}if(!e.target.dataset.filter)return;let type=e.target.dataset.filter,value=e.target.value;if(type==='search')S.search=value;if(type==='user')S.userFilter=value;let pos=e.target.selectionStart;let name=e.target.dataset.filter;let prev=document.activeElement;render();let next=document.querySelector(`[data-filter="${name}"]`);if(next){next.focus();if(name==='search')next.setSelectionRange(pos,pos)}});
 document.addEventListener('change',async e=>{
  if(e.target.dataset.styleField&&S.chatDesignOpen){setChatStyleField(e.target);refreshChatEditor();return}
+ if(e.target.dataset.vacationMap!==undefined){
+  if(!S.vacationFile||!isAdmin())return;
+  const source=e.target.dataset.vacationMap,id=Number(e.target.value);
+  S.vacationOverrides[source]=id;
+  try{const path='/api/vacation/import?year='+S.vacationYear+'&preview=1&mapping='+encodeURIComponent(JSON.stringify(S.vacationOverrides));
+   const response=await backupRequest(path,'POST',S.vacationFile);S.vacationImportPreview=await response.json();render()}
+  catch(err){notify(err.message,true)}return
+ }
+ if(e.target.id==='sotipb-file'){
+  const file=e.target.files?.[0];if(!file)return;
+  if(!file.name.toLowerCase().endsWith('.xlsx')||file.size>3*1024*1024){notify('Выберите XLSX до 3 МБ',true);return}
+  S.sotipbFile=file;S.sotipbResult=null;render();return
+ }
  if(e.target.id==='vacation-import-file'){
   const file=e.target.files?.[0];if(!file)return;
   if(!isAdmin()||S.page!=='vacation')return;
   if(file.size>2*1024*1024){notify('XLSX не более 2 МБ',true);return}
-  S.vacationFile=file;S.vacationImportPreview=null;
+  S.vacationFile=file;S.vacationImportPreview=null;S.vacationOverrides={};
   try{const response=await backupRequest('/api/vacation/import?year='+S.vacationYear+'&preview=1','POST',file);S.vacationImportPreview=await response.json();render()}
   catch(err){S.vacationFile=null;notify(err.message,true)}return
  }

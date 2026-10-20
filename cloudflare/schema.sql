@@ -54,6 +54,31 @@ CREATE TABLE IF NOT EXISTS vacation_schedule (
  material_help INTEGER NOT NULL DEFAULT 0 CHECK(material_help IN (0,1)),
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  PRIMARY KEY(user_id,year,month));
+        CREATE TABLE IF NOT EXISTS chat_pins (
+         user_id INTEGER NOT NULL REFERENCES users(id), room_key TEXT NOT NULL,
+         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         PRIMARY KEY(user_id,room_key));
+        CREATE TABLE IF NOT EXISTS sotipb_runs (
+          id INTEGER PRIMARY KEY, uploader_id INTEGER NOT NULL REFERENCES users(id),
+          source_name TEXT NOT NULL, source_size INTEGER NOT NULL, result_size INTEGER NOT NULL,
+          row_count INTEGER NOT NULL, group_count INTEGER NOT NULL,
+          warnings_json TEXT NOT NULL DEFAULT '[]', source_sha256 TEXT NOT NULL,
+          result_sha256 TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS sotipb_parts (
+          run_id INTEGER NOT NULL REFERENCES sotipb_runs(id),
+          kind TEXT NOT NULL CHECK(kind IN ('source','result')),
+          part_no INTEGER NOT NULL, content_b64 TEXT NOT NULL,
+          PRIMARY KEY(run_id,kind,part_no));
+        CREATE TABLE IF NOT EXISTS backup_monitor (
+         source TEXT PRIMARY KEY, last_check TEXT NOT NULL DEFAULT '',
+         last_saved TEXT NOT NULL DEFAULT '', file_name TEXT NOT NULL DEFAULT '',
+         file_size INTEGER NOT NULL DEFAULT 0, signature TEXT NOT NULL DEFAULT '',
+         state TEXT NOT NULL DEFAULT 'unknown', detail TEXT NOT NULL DEFAULT '');
+        CREATE TABLE IF NOT EXISTS restore_stage (
+          transfer_id TEXT NOT NULL, table_name TEXT NOT NULL, chunk_no INTEGER NOT NULL,
+          payload TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY(transfer_id,table_name,chunk_no));
         CREATE TABLE IF NOT EXISTS user_avatars (
           user_id INTEGER PRIMARY KEY REFERENCES users(id), image_b64 TEXT NOT NULL DEFAULT '',
           mime TEXT NOT NULL DEFAULT '', image_url TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1);

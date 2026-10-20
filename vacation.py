@@ -46,7 +46,7 @@ def roster(db,year):
 def _key(name):
     return ' '.join(str(name).casefold().replace('ё','е').split())
 
-def parse_xlsx(blob,people,year):
+def parse_xlsx(blob,people,year,overrides=None):
     """Read only top sheet's dates. Lower sheet's +М applies only to an existing upper cell."""
     from openpyxl import load_workbook
     if not blob.startswith(b'PK') or len(blob)>2*1024*1024:raise VacationError('Выберите XLSX до 2 МБ')
@@ -59,7 +59,8 @@ def parse_xlsx(blob,people,year):
         for person in people:
             by_name.setdefault(_key(person['name']),[]).append(person['id'])
             by_name.setdefault(_key(person['name']).split()[0],[]).append(person['id'])
-        found=[];missing=[];entries=[];warnings=[]
+        found=[];missing=[];entries=[];warnings=[];mapping=[];overrides=overrides or {}
+        by_id={p['id']:p for p in people}
         for row in range(3,min(sheet.max_row or 200,200)+1):
             name=sheet.cell(row,1).value
             if not isinstance(name,str) or not name.strip():continue
@@ -67,9 +68,17 @@ def parse_xlsx(blob,people,year):
             if _key(name)=='фио':break
             full=_key(name);surname=full.split()[0]
             matches=list(dict.fromkeys(by_name.get(full,[]) or by_name.get(surname,[])))
-            if len(matches)!=1:
+            manual=overrides.get(name.strip())
+            if manual is not None:
+                if type(manual)!=int or (manual!=0 and manual not in by_id):raise VacationError('Сотрудник для строки «'+name.strip()+'» не найден')
+                matches=[manual] if manual else []
+            uid=matches[0] if len(matches)==1 else None
+            mapping.append({'source':name.strip(),'user_id':uid,
+                            'target':by_id[uid]['name'] if uid else '',
+                            'reason':'Пропущено вручную' if manual==0 else 'Выбрано вручную' if manual is not None else 'Совпадение' if uid else 'Не найден или несколько однофамильцев'})
+            if uid is None:
                 missing.append(name.strip());continue
-            uid=matches[0];found.append(name.strip())
+            found.append(name.strip())
             for month in range(1,13):
                 text=str(sheet.cell(row,month+1).value or '')
                 raw=DATE_RE.findall(text)
@@ -80,8 +89,10 @@ def parse_xlsx(blob,people,year):
                 lower=sheet.cell(row+14,month+1).value
                 help_flag=bool(lower and re.search(r'\b[МM]\b',str(lower).upper()))
                 entries.append((uid,year,month,start,end,int(help_flag)))
-        if not entries:raise VacationError('В файле нет подходящих дат для выбранного года и сотрудников')
-        return {'entries':entries,'matched':found,'unmatched':missing,'warnings':warnings}
+        if not mapping:raise VacationError('В файле не найдены строки сотрудников')
+        keys=[(entry[0],entry[2]) for entry in entries]
+        if len(set(keys))!=len(keys):raise VacationError('Две строки файла сопоставлены одному сотруднику и месяцу; исправьте соответствия')
+        return {'entries':entries,'matched':found,'unmatched':missing,'warnings':warnings,'mapping':mapping}
     finally:book.close()
 
 def export_xlsx(year,people,rows):

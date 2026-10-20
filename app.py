@@ -21,6 +21,7 @@ import traceback
 import backup_tools
 import d1_store
 import vacation
+import sotipb
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,7 +33,7 @@ ROOT = Path(__file__).resolve().parent
 DB = ROOT / 'worktrack.sqlite3'
 BACKUP_DIR = ROOT / 'backups'
 DB_LOCK = threading.RLock()
-BUILD_ID = '20261013-41'  # Public /health marker to verify which build Render actually serves.
+BUILD_ID = '20261020-44'  # Public /health marker to verify which build Render actually serves.
 # New effects reuse the existing CHECK(kind IN ('people','speech')) table safely.
 # This keeps old production D1/SQLite backups and schema compatible.
 PRANK_EFFECT_PREFIX = '\x1eFORMA_EFFECT_V1:'
@@ -113,6 +114,31 @@ CREATE TABLE IF NOT EXISTS vacation_schedule (
  material_help INTEGER NOT NULL DEFAULT 0 CHECK(material_help IN (0,1)),
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  PRIMARY KEY(user_id,year,month));
+        CREATE TABLE IF NOT EXISTS chat_pins (
+         user_id INTEGER NOT NULL REFERENCES users(id), room_key TEXT NOT NULL,
+         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         PRIMARY KEY(user_id,room_key));
+        CREATE TABLE IF NOT EXISTS sotipb_runs (
+          id INTEGER PRIMARY KEY, uploader_id INTEGER NOT NULL REFERENCES users(id),
+          source_name TEXT NOT NULL, source_size INTEGER NOT NULL, result_size INTEGER NOT NULL,
+          row_count INTEGER NOT NULL, group_count INTEGER NOT NULL,
+          warnings_json TEXT NOT NULL DEFAULT '[]', source_sha256 TEXT NOT NULL,
+          result_sha256 TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS sotipb_parts (
+          run_id INTEGER NOT NULL REFERENCES sotipb_runs(id),
+          kind TEXT NOT NULL CHECK(kind IN ('source','result')),
+          part_no INTEGER NOT NULL, content_b64 TEXT NOT NULL,
+          PRIMARY KEY(run_id,kind,part_no));
+        CREATE TABLE IF NOT EXISTS backup_monitor (
+         source TEXT PRIMARY KEY, last_check TEXT NOT NULL DEFAULT '',
+         last_saved TEXT NOT NULL DEFAULT '', file_name TEXT NOT NULL DEFAULT '',
+         file_size INTEGER NOT NULL DEFAULT 0, signature TEXT NOT NULL DEFAULT '',
+         state TEXT NOT NULL DEFAULT 'unknown', detail TEXT NOT NULL DEFAULT '');
+        CREATE TABLE IF NOT EXISTS restore_stage (
+          transfer_id TEXT NOT NULL, table_name TEXT NOT NULL, chunk_no INTEGER NOT NULL,
+          payload TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY(transfer_id,table_name,chunk_no));
         CREATE TABLE IF NOT EXISTS user_avatars (
           user_id INTEGER PRIMARY KEY REFERENCES users(id), image_b64 TEXT NOT NULL DEFAULT '',
           mime TEXT NOT NULL DEFAULT '', image_url TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1);
@@ -254,6 +280,21 @@ def month_range(month):
 
 class APIError(Exception):
     def __init__(self, status, message): self.status=status; self.message=message
+
+def check_expected(db, data, table, criteria, params, fields):
+    """Compare a client's last seen row with the live row before any mutation.
+
+    Existing old clients without expected remain compatible; new UI sends it on edits.
+    The process lock serializes requests on the single Render instance.
+    """
+    if 'expected' not in data:return
+    prior=data['expected']
+    if prior is not None and (not isinstance(prior,dict) or set(prior)!=set(fields)):
+        raise APIError(400,'Некорректная версия записи')
+    row=db.execute('SELECT '+','.join('"'+f+'"' for f in fields)+' FROM '+table+' WHERE '+criteria,params).fetchone()
+    current={field:row[field] for field in fields} if row else None
+    if current!=prior:
+        raise APIError(409,'Данные уже изменены в другой вкладке или другим пользователем. Обновите страницу и проверьте новое значение перед повтором')
 
 class Handler(BaseHTTPRequestHandler):
     server_version = 'Forma/1.0'
@@ -399,6 +440,28 @@ class Handler(BaseHTTPRequestHandler):
                 return self.setup_page()
             if path=='/setup/import' and method=='POST':
                 return self.setup_import()
+            if path=='/internal/backup/report' and method=='POST':
+                expected=os.environ.get('AUTOMATED_BACKUP_TOKEN','')
+                supplied=self.headers.get('X-Forma-Backup-Key','')
+                if len(expected)<32 or len(supplied)>256 or not hmac.compare_digest(supplied,expected):
+                    raise APIError(403,'Доступ запрещён')
+                data=self.body(4096)
+                state=data.get('state');name=data.get('file_name','');size=data.get('file_size',0)
+                signature=data.get('signature','');detail=str(data.get('detail',''))[:180]
+                if state not in ('saved','unchanged','error') or not isinstance(name,str) or len(name)>180 or not isinstance(size,int) or size<0 or size>100000000 or not isinstance(signature,str) or (signature and not re.fullmatch('[a-f0-9]{64}',signature)):
+                    raise APIError(400,'Некорректный отчёт о резервной копии')
+                with connect() as db:
+                    db.execute('''INSERT INTO backup_monitor(source,last_check,last_saved,file_name,file_size,signature,state,detail)
+                        VALUES('google',CURRENT_TIMESTAMP,CASE WHEN ?='saved' THEN CURRENT_TIMESTAMP ELSE '' END,?,?,?,?,?)
+                        ON CONFLICT(source) DO UPDATE SET last_check=CURRENT_TIMESTAMP,
+                        last_saved=CASE WHEN excluded.state='saved' THEN CURRENT_TIMESTAMP ELSE backup_monitor.last_saved END,
+                        file_name=CASE WHEN excluded.state='saved' THEN excluded.file_name ELSE backup_monitor.file_name END,
+                        file_size=CASE WHEN excluded.state='saved' THEN excluded.file_size ELSE backup_monitor.file_size END,
+                        signature=CASE WHEN excluded.state='saved' THEN excluded.signature ELSE backup_monitor.signature END,
+                        state=excluded.state,detail=excluded.detail''',
+                        (state,name,size,signature,state,detail))
+                    db.commit()
+                return self.send_json({'ok':True})
             if path=='/internal/backup' and method=='POST':
                 # Dedicated read-only credential for Google Drive backups: never give
                 # Apps Script an administrator password or an interactive session.
@@ -441,6 +504,14 @@ class Handler(BaseHTTPRequestHandler):
                         db.execute('DELETE FROM prank_presence WHERE session_hash=?',(token_hash,))
                     log(db,user['id'],'logout','Вышел из системы'); db.commit()
                     return self.send_json({'ok':True},cookie='session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0')
+                if path=='/api/sotipb/template' and method=='GET':
+                    self.require(db,True)
+                    return self.send_bytes(sotipb.template(),'sotipb-template.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                if path=='/api/sotipb/history' and method=='GET': return self.sotipb_history(db,self.require(db,True),q)
+                if path=='/api/sotipb/convert' and method=='POST': return self.sotipb_convert(db,self.require(db,True))
+                if path=='/api/sotipb/file' and method=='GET': return self.sotipb_file(db,self.require(db,True),q)
+                if path.startswith('/api/sotipb/history/') and method=='DELETE': return self.sotipb_delete(db,self.require(db,True),path)
+                if path=='/api/deploy/check' and method=='GET': return self.deploy_check(db,self.require(db,True))
                 if path=='/api/backup/status' and method=='GET': return self.backup_status(db,self.require(db,True))
                 if path=='/api/backup/download' and method=='GET': return self.backup_download(db,self.require(db,True))
                 if path=='/api/backup/safety' and method=='GET': return self.backup_safety(db,self.require(db,True),q)
@@ -460,6 +531,7 @@ class Handler(BaseHTTPRequestHandler):
                 if path=='/api/chat' and method=='POST': return self.chat_send(db,user,self.body())
                 if path=='/api/chat/status' and method=='GET': return self.chat_status(db,user,q)
                 if path=='/api/chat/read' and method=='POST': return self.chat_read(db,user,self.body())
+                if path=='/api/chat/pin' and method=='POST': return self.chat_pin(db,user,self.body())
                 if path=='/api/chat/theme' and method=='POST': return self.chat_theme_save(db,user,self.body())
                 if path=='/api/avatar' and method=='POST': return self.avatar_save(db,user,self.body(150000))
                 if path.startswith('/api/avatar/') and method=='GET': return self.avatar_image(db,user,path)
@@ -511,6 +583,8 @@ class Handler(BaseHTTPRequestHandler):
             if type(uid)!=int or type(month)!=int or not 1<=month<=12: raise vacation.VacationError('Некорректный сотрудник или месяц')
             person=db.execute('SELECT name FROM users WHERE id=? AND is_staff=1',(uid,)).fetchone()
             if not person: raise vacation.VacationError('Сотрудник не найден')
+            check_expected(db,data,'vacation_schedule','user_id=? AND year=? AND month=?',
+                           (uid,year,month),('start_date','end_date','material_help'))
             start=data.get('start_date');end=data.get('end_date')
             if start=='' and end=='':
                 db.execute('DELETE FROM vacation_schedule WHERE user_id=? AND year=? AND month=?',(uid,year,month))
@@ -534,6 +608,8 @@ class Handler(BaseHTTPRequestHandler):
             exists=db.execute('''SELECT u.name FROM vacation_schedule v JOIN users u ON u.id=v.user_id
                 WHERE v.user_id=? AND v.year=? AND v.month=? AND u.is_staff=1''',(uid,year,month)).fetchone()
             if not exists:raise vacation.VacationError('Сначала укажите даты отпуска в верхней таблице')
+            check_expected(db,data,'vacation_schedule','user_id=? AND year=? AND month=?',
+                           (uid,year,month),('start_date','end_date','material_help'))
             db.execute('''UPDATE vacation_schedule SET material_help=?,updated_at=CURRENT_TIMESTAMP
                 WHERE user_id=? AND year=? AND month=?''',(int(help_flag),uid,year,month))
             log(db,user['id'],'vacation_help',f'{exists["name"]}, {year}-{month:02d}: {"+М" if help_flag else "+"}')
@@ -551,12 +627,21 @@ class Handler(BaseHTTPRequestHandler):
         if len(raw)!=size:raise APIError(400,'Файл не загрузился полностью')
         try:
             people,_=vacation.roster(db,year)
-            result=vacation.parse_xlsx(raw,people,year)
-        except vacation.VacationError as exc:raise APIError(400,str(exc))
+            map_arg=q.get('mapping',['{}'])[0]
+            if len(map_arg)>4000:raise vacation.VacationError('Слишком длинное сопоставление ФИО')
+            overrides=json.loads(map_arg)
+            if not isinstance(overrides,dict):raise vacation.VacationError('Некорректное сопоставление ФИО')
+            result=vacation.parse_xlsx(raw,people,year,overrides)
+        except (vacation.VacationError,ValueError,TypeError) as exc:raise APIError(400,str(exc))
         existing={(r['user_id'],r['month']) for r in db.execute('SELECT user_id,month FROM vacation_schedule WHERE year=?',(year,))}
+        snapshot_rows=[dict(r) for r in db.execute('''SELECT user_id,month,start_date,end_date,material_help
+              FROM vacation_schedule WHERE year=? ORDER BY user_id,month''',(year,))]
+        snapshot=hashlib.sha256(json.dumps(snapshot_rows,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+        if q.get('preview',['1'])[0]=='0' and 'snapshot' in q and q['snapshot'][0]!=snapshot:
+            raise APIError(409,'План отпусков изменился после предпросмотра. Обновите предпросмотр и проверьте его перед импортом')
         pending=[r for r in result['entries'] if (r[0],r[2]) not in existing]
         payload={'year':year,'matched':result['matched'],'unmatched':result['unmatched'],
-                 'found':len(result['entries']),'new':len(pending),'unchanged':len(result['entries'])-len(pending)}
+                 'found':len(result['entries']),'mapping':result['mapping'],'snapshot':snapshot,'new':len(pending),'unchanged':len(result['entries'])-len(pending)}
         if q.get('preview',['1'])[0]=='0':
             for row in pending:
                 db.execute('''INSERT OR IGNORE INTO vacation_schedule
@@ -570,13 +655,112 @@ class Handler(BaseHTTPRequestHandler):
         raw=vacation.export_xlsx(year,people,rows)
         self.send_bytes(raw,f'forma-otpusk-{year}.xlsx',
                         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    def sotipb_history(self,db,user,q):
+        try:before=int(q.get('before',['0'])[0])
+        except ValueError:raise APIError(400,'Некорректная страница истории')
+        if before<0:raise APIError(400,'Некорректная страница истории')
+        runs=json_rows(db.execute('''SELECT r.id,r.source_name,r.source_size,r.result_size,
+          r.row_count,r.group_count,r.warnings_json,r.created_at,u.name uploader_name
+          FROM sotipb_runs r LEFT JOIN users u ON u.id=r.uploader_id
+          WHERE r.state='ready' AND (?=0 OR r.id<?) ORDER BY r.id DESC LIMIT 51''',
+          (before,before)).fetchall())
+        more=len(runs)>50;runs=runs[:50]
+        for run in runs:run['warnings']=json.loads(run.pop('warnings_json'))
+        return self.send_json({'runs':runs,'has_more':more,
+                               'next':runs[-1]['id'] if more else None,'limit_bytes':12*1024*1024})
+    def sotipb_convert(self,db,user):
+        if self.headers.get('Content-Type','').split(';')[0]!='application/octet-stream':
+            raise APIError(415,'Выберите XLSX-файл')
+        try:size=int(self.headers.get('Content-Length','0'))
+        except ValueError:raise APIError(400,'Некорректный размер файла')
+        if not 0<size<=sotipb.MAX_INPUT:raise APIError(413,'Исходный XLSX: максимум 3 МБ')
+        source=self.rfile.read(size)
+        if len(source)!=size:raise APIError(400,'Файл загрузился не полностью')
+        filename=self.headers.get('X-Forma-File-Name','')
+        from urllib.parse import unquote
+        filename=re.sub(r'[\\/\r\n\x00-\x1f]','',unquote(filename)).strip()[:140]
+        if not filename.lower().endswith('.xlsx'):filename='лист 1.xlsx'
+        try:result,details=sotipb.convert(source)
+        except sotipb.ConversionError as exc:raise APIError(400,str(exc))
+        cap=12*1024*1024
+        used=db.execute("SELECT COALESCE(SUM(source_size+result_size),0) FROM sotipb_runs WHERE state='ready'").fetchone()[0]
+        if used+len(source)+len(result)>cap:
+            raise APIError(413,'История СОТИПБ достигла 12 МБ. Скачайте нужные файлы и удалите старые пары перед новой загрузкой')
+        args=(user['id'],filename,len(source),len(result),details['rows'],details['groups'],
+              json.dumps(details['warnings'],ensure_ascii=False),hashlib.sha256(source).hexdigest(),hashlib.sha256(result).hexdigest())
+        insert='''INSERT INTO sotipb_runs(uploader_id,source_name,source_size,result_size,
+                row_count,group_count,warnings_json,source_sha256,result_sha256,state)
+                VALUES(?,?,?,?,?,?,?,?,?,'pending')'''
+        run=None
+        try:
+            cursor=db.query(insert,args) if isinstance(db,d1_store.D1Connection) else db.execute(insert,args)
+            run=cursor.lastrowid
+            for kind,content in (('source',source),('result',result)):
+                for part,start in enumerate(range(0,len(content),48000)):
+                    db.execute('INSERT INTO sotipb_parts(run_id,kind,part_no,content_b64) VALUES(?,?,?,?)',
+                               (run,kind,part,base64.b64encode(content[start:start+48000]).decode('ascii')))
+            db.commit()
+            db.execute("UPDATE sotipb_runs SET state='ready' WHERE id=?",(run,))
+            log(db,user['id'],'sotipb',f'СОТИПБ: {filename}, {details["rows"]} строк, {details["groups"]} групп')
+            db.commit()
+        except Exception:
+            if run is not None:
+                try:
+                    db.rollback();db.execute('DELETE FROM sotipb_parts WHERE run_id=?',(run,))
+                    db.execute('DELETE FROM sotipb_runs WHERE id=?',(run,));db.commit()
+                except Exception:pass
+            raise
+        return self.send_json({'ok':True,'id':run,'rows':details['rows'],
+                               'groups':details['groups'],'warnings':details['warnings'],
+                               'warning_count':details['warning_count']})
+    def sotipb_file(self,db,user,q):
+        try:run=int(q.get('id',[''])[0]);kind=q.get('kind',[''])[0]
+        except ValueError:raise APIError(400,'Некорректный номер файла')
+        if run<=0 or kind not in ('source','result'):raise APIError(400,'Некорректный номер файла')
+        row=db.execute('SELECT * FROM sotipb_runs WHERE id=? AND state=?',(run,'ready')).fetchone()
+        if not row:raise APIError(404,'Запись истории не найдена')
+        chunks=db.execute('SELECT part_no,content_b64 FROM sotipb_parts WHERE run_id=? AND kind=? ORDER BY part_no',(run,kind)).fetchall()
+        try:content=b''.join(base64.b64decode(part['content_b64'],validate=True) for part in chunks)
+        except (ValueError,binascii.Error):raise APIError(503,'Сохранённый файл повреждён')
+        if [part['part_no'] for part in chunks]!=list(range(len(chunks))) or len(content)!=row[kind+'_size'] or hashlib.sha256(content).hexdigest()!=row[kind+'_sha256']:
+            raise APIError(503,'Сохранённый файл не прошёл проверку целостности')
+        return self.send_bytes(content,f'sotipb-{kind}-{run}.xlsx',
+                               'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    def sotipb_delete(self,db,user,path):
+        try:run=int(path.rsplit('/',1)[1])
+        except ValueError:raise APIError(400,'Некорректный номер файла')
+        if run<=0:raise APIError(400,'Некорректный номер файла')
+        row=db.execute('SELECT source_name FROM sotipb_runs WHERE id=? AND state=?',(run,'ready')).fetchone()
+        if not row:raise APIError(404,'Запись истории не найдена')
+        db.execute('DELETE FROM sotipb_parts WHERE run_id=?',(run,))
+        db.execute('DELETE FROM sotipb_runs WHERE id=?',(run,))
+        log(db,user['id'],'sotipb_delete',f'Удалена пара файлов СОТИПБ #{run}: {row["source_name"]}')
+        db.commit();return self.send_json({'ok':True})
+    def deploy_check(self,db,user):
+        """Read-only post-deploy diagnostics on the real running process and its D1."""
+        required=('/index.html','/main.js','/styles.css','/effect-snake.png')
+        missing=[name for name in required if not (ROOT/'web'/name[1:]).is_file()]
+        index=(ROOT/'web'/'index.html').read_text(encoding='utf-8')
+        try:
+            if isinstance(db,d1_store.D1Connection):d1_store.require_complete_schema(db)
+            counts=backup_tools.summary(db)['counts']
+            database=True;detail='D1 отвечает; таблицы отпуска и чата доступны'
+        except Exception as exc:
+            counts={};database=False;detail='База или набор таблиц недоступны: '+str(exc)[:170]
+        checks={'render':True,'interface':not missing and ('main.js?v='+BUILD_ID) in index and ('styles.css?v='+BUILD_ID) in index,
+                'database':database,'backup_tables':database and set(backup_tools.BUSINESS)==set(d1_store.TABLES)-d1_store.EXCLUDED_FROM_BACKUP}
+        self.send_json({'build':BUILD_ID,'backend':os.environ.get('DATABASE_BACKEND','sqlite'),
+                        'checks':checks,'ok':all(checks.values()),'detail':detail,
+                        'missing_files':missing,'counts':{'vacation_schedule':counts.get('vacation_schedule'),
+                                                        'chat_messages':counts.get('chat_messages')}})
     def backup_status(self,db,user):
         safety=[]
         if BACKUP_DIR.is_dir():
             for item in sorted(BACKUP_DIR.glob('before-restore-*.zip'),reverse=True)[:20]:
                 if item.is_file() and not item.is_symlink():
                     safety.append({'name':item.name,'size':item.stat().st_size})
-        self.send_json({'current':backup_tools.summary(db),'safety':safety})
+        monitor=json_rows(db.execute('SELECT source,last_check,last_saved,file_name,file_size,signature,state,detail FROM backup_monitor ORDER BY source').fetchall())
+        self.send_json({'current':backup_tools.summary(db),'safety':safety,'monitor':monitor})
     def backup_safety(self,db,user,q):
         name=q.get('name',[''])[0]
         if not re.fullmatch(r'before-restore-\d{8}-\d{6}-[0-9a-f]{8}\.zip',name):
@@ -593,6 +777,12 @@ class Handler(BaseHTTPRequestHandler):
     def backup_download(self,db,user):
         raw,manifest=self.make_backup(db)
         name='forma-backup-'+dt.datetime.now(TZ).strftime('%Y%m%d-%H%M%S')+'.zip'
+        db.execute('''INSERT INTO backup_monitor(source,last_check,last_saved,file_name,file_size,state)
+            VALUES('manual',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,?,?,'generated')
+            ON CONFLICT(source) DO UPDATE SET last_check=CURRENT_TIMESTAMP,last_saved=CURRENT_TIMESTAMP,
+            file_name=excluded.file_name,file_size=excluded.file_size,state='generated'
+            ''',(name,len(raw)))
+        db.commit()
         self.send_bytes(raw,name,'application/zip')
     def backup_inspect(self,db,user):
         raw=self.backup_body()
@@ -628,8 +818,13 @@ class Handler(BaseHTTPRequestHandler):
             # Old external ZIPs may contain avatars; never restore them into current data.
             source.execute('DELETE FROM user_avatars')
             source.commit()
+            expected_signature=backup_tools.fingerprint(source)
             if isinstance(db,d1_store.D1Connection): d1_store.replace_atomic(db,source)
             else: source.backup(db)
+        # Verify all persistent tables, including vacations, chart inputs and chat,
+        # before reporting a restore as successful. Activity is logged just below.
+        if backup_tools.fingerprint(db)!=expected_signature:
+            raise APIError(503,'Данные восстановлены, но полная проверка не прошла. Не загружайте ZIP повторно; обратитесь за помощью')
         if not isinstance(db,d1_store.D1Connection):
             db.execute('DELETE FROM sessions')
             db.execute('DELETE FROM prank_presence')
@@ -717,11 +912,13 @@ class Handler(BaseHTTPRequestHandler):
     def bootstrap(self,db,user,q):
         month=q.get('month',[TODAY().strftime('%Y-%m')])[0]; first,last=month_range(month)
         admin=user['role']=='admin'
-        users=json_rows(db.execute('''SELECT u.id,u.name,u.username,u.role,u.is_staff,u.active,u.created_at,
+        users=json_rows(db.execute('''SELECT u.id,u.name,u.username,u.role,u.is_staff,u.active,u.created_at,u.password_hash,
             COALESCE(a.revision,0) avatar_revision,COALESCE(a.image_url,'') avatar_url,
             CASE WHEN a.image_b64<>'' THEN 1 ELSE 0 END avatar_stored
             FROM users u LEFT JOIN user_avatars a ON a.user_id=u.id
             WHERE u.is_staff=1 ORDER BY u.active DESC,u.name''').fetchall()) if admin else [dict(user)]
+        if admin:
+            for visible in users:visible['password_revision']=hashlib.sha256(visible.pop('password_hash').encode()).hexdigest()
         tasks=json_rows(db.execute('SELECT id,title,unit,norm,category,active FROM tasks ORDER BY active DESC,id').fetchall())
         eargs=[first,last]; aargs=[first,last]
         efilter=''; afilter=''
@@ -753,6 +950,8 @@ class Handler(BaseHTTPRequestHandler):
         if target!=user['id'] and user['role']!='admin': raise APIError(403,'Можно изменять только свои записи')
         owner=db.execute('SELECT name FROM users WHERE id=? AND is_staff=1 AND active=1',(target,)).fetchone()
         if not owner: raise APIError(400,'Сотрудник не найден')
+        check_expected(db,data,'entries','user_id=? AND task_id=? AND work_date=?',
+                       (target,task_id,day.isoformat()),('quantity','note'))
         db.execute('''INSERT INTO entries(user_id,task_id,work_date,quantity,note) VALUES(?,?,?,?,?)
             ON CONFLICT(user_id,task_id,work_date) DO UPDATE SET quantity=excluded.quantity,note=excluded.note,updated_at=CURRENT_TIMESTAMP''',
             (target,task_id,day.isoformat(),qty,note))
@@ -778,6 +977,8 @@ class Handler(BaseHTTPRequestHandler):
             raise APIError(400,'Архивная работа недоступна для новой записи')
         comment=str(data.get('comment') or '').strip()
         if len(comment)>500: raise APIError(400,'Комментарий не длиннее 500 символов')
+        check_expected(db,data,'cell_comments','user_id=? AND task_id=? AND work_date=?',
+                       (target,task_id,day),('body',))
         if comment:
             db.execute('''INSERT INTO cell_comments(user_id,task_id,work_date,body) VALUES(?,?,?,?)
                 ON CONFLICT(user_id,task_id,work_date) DO UPDATE SET body=excluded.body,updated_at=CURRENT_TIMESTAMP''',
@@ -793,6 +994,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError: raise APIError(400,'Некорректный идентификатор')
         existing=db.execute('SELECT * FROM entries WHERE id=?',(entry_id,)).fetchone()
         if not existing: raise APIError(404,'Запись не найдена')
+        check_expected(db,data,'entries','id=?',(entry_id,),('user_id','task_id','work_date','quantity','note'))
         if existing['user_id']!=user['id'] and user['role']!='admin': raise APIError(403,'Нет доступа')
         day=date_ok(data.get('date'))
         try: task_id=int(data.get('task_id') or 0); target=int(data.get('user_id') or existing['user_id']); qty=float(data.get('quantity'))
@@ -821,6 +1023,8 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError: raise APIError(400,'Некорректный идентификатор')
         row=db.execute('SELECT e.*,t.title FROM entries e JOIN tasks t ON t.id=e.task_id WHERE e.id=?',(entry_id,)).fetchone()
         if not row: raise APIError(404,'Запись не найдена')
+        if int(self.headers.get('Content-Length','0') or 0):
+            check_expected(db,self.body(),'entries','id=?',(entry_id,),('user_id','task_id','work_date','quantity','note'))
         if row['user_id']!=user['id'] and user['role']!='admin': raise APIError(403,'Нет доступа')
         db.execute('DELETE FROM entries WHERE id=?',(entry_id,)); log(db,user['id'],'delete_entry',f'Удалена запись: {row["title"][:85]} ({row["work_date"]})'); db.commit()
         self.send_json({'ok':True})
@@ -833,6 +1037,7 @@ class Handler(BaseHTTPRequestHandler):
         status=data.get('status'); reason=str(data.get('reason','')).strip()[:160]
         if status not in ('present','absent','clear'): raise APIError(400,'Некорректный статус')
         if status=='absent' and not reason: raise APIError(400,'Укажите причину отсутствия')
+        check_expected(db,data,'attendance','user_id=? AND day=?',(target,day.isoformat()),('status','reason'))
         if status=='clear': db.execute('DELETE FROM attendance WHERE user_id=? AND day=?',(target,day.isoformat()))
         else: db.execute('''INSERT INTO attendance(user_id,day,status,reason) VALUES(?,?,?,?)
             ON CONFLICT(user_id,day) DO UPDATE SET status=excluded.status,reason=excluded.reason,updated_at=CURRENT_TIMESTAMP''',
@@ -851,6 +1056,8 @@ class Handler(BaseHTTPRequestHandler):
             label=owner['name']
         else:
             target=None; label='Вся команда'
+        if target is None:check_expected(db,data,'daily_hours','day=?',(day,),('hours',))
+        else:check_expected(db,data,'personal_hours','user_id=? AND day=?',(target,day),('hours',))
         if data.get('hours') is None:
             if target is None: db.execute('DELETE FROM daily_hours WHERE day=?',(day,))
             else: db.execute('DELETE FROM personal_hours WHERE user_id=? AND day=?',(target,day))
@@ -882,6 +1089,13 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError: raise APIError(400,'Некорректный пользователь')
         target=db.execute('SELECT * FROM users WHERE id=? AND is_staff=1',(uid,)).fetchone()
         if not target: raise APIError(404,'Сотрудник не найден')
+        expected=data.get('expected')
+        if isinstance(expected,dict) and 'password_revision' in expected:
+            revision=hashlib.sha256(target['password_hash'].encode()).hexdigest()
+            if expected['password_revision']!=revision:
+                raise APIError(409,'Пароль сотрудника уже изменён в другой вкладке. Обновите данные')
+            data={**data,'expected':{k:v for k,v in expected.items() if k!='password_revision'}}
+        check_expected(db,data,'users','id=?',(uid,),('name','username','role','active'))
         updates=[]; params=[]
         if 'role' in data:
             role=data['role']
@@ -933,6 +1147,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError: raise APIError(400,'Некорректная работа')
         old=db.execute('SELECT * FROM tasks WHERE id=?',(tid,)).fetchone()
         if not old: raise APIError(404,'Работа не найдена')
+        check_expected(db,data,'tasks','id=?',(tid,),('title','unit','norm','category','active'))
         updates=[]; params=[]
         for key,maxlen in [('title',300),('unit',30),('category',60)]:
             if key in data:
@@ -1021,6 +1236,11 @@ class Handler(BaseHTTPRequestHandler):
     def chat_theme_save(self,db,user,data):
         key=chat_theme_key(db,user,data.get('room'))
         theme=valid_chat_style(data.get('style'))
+        if 'expected' in data:
+            current=db.execute('SELECT theme_json FROM chat_themes WHERE room_key=?',(key,)).fetchone()
+            stored=valid_chat_style(json.loads(current['theme_json'])) if current else {}
+            if stored!=data['expected']:
+                raise APIError(409,'Рамку беседы уже изменил другой участник. Обновите чат перед сохранением')
         db.execute('''INSERT INTO chat_themes(room_key,theme_json,updated_by)
             VALUES(?,?,?) ON CONFLICT(room_key) DO UPDATE SET
             theme_json=excluded.theme_json,updated_by=excluded.updated_by,
@@ -1045,6 +1265,23 @@ class Handler(BaseHTTPRequestHandler):
                           (user['id'],recipient,text,json.dumps(style,separators=(',',':'))))
         db.commit()
         self.send_json({'ok':True,'id':cursor.lastrowid})
+    def chat_pin(self,db,user,data):
+        room=data.get('room');pin=data.get('pinned')
+        if type(pin)!=bool:raise APIError(400,'Некорректная отметка закрепления')
+        if room=='general':key='general'
+        else:
+            try:peer=int(room)
+            except (TypeError,ValueError):raise APIError(400,'Некорректный чат')
+            if peer<=0 or peer==user['id'] or str(peer)!=room or not db.execute('SELECT 1 FROM users WHERE id=? AND active=1',(peer,)).fetchone():
+                raise APIError(400,'Чат не найден')
+            key='dm:'+room
+        if 'expected_pinned' in data:
+            current=bool(db.execute('SELECT 1 FROM chat_pins WHERE user_id=? AND room_key=?',(user['id'],key)).fetchone())
+            if type(data['expected_pinned'])!=bool:raise APIError(400,'Некорректная версия закрепления')
+            if current!=data['expected_pinned']:raise APIError(409,'Закрепление чата уже изменено в другой вкладке. Обновите список чатов')
+        if pin:db.execute('INSERT OR IGNORE INTO chat_pins(user_id,room_key) VALUES(?,?)',(user['id'],key))
+        else:db.execute('DELETE FROM chat_pins WHERE user_id=? AND room_key=?',(user['id'],key))
+        db.commit();self.send_json({'ok':True,'room':room,'pinned':pin})
     def chat_status(self,db,user,q):
         """Unread counters and new-message notices; first poll never replays old toasts."""
         uid=user['id']
@@ -1070,10 +1307,18 @@ class Handler(BaseHTTPRequestHandler):
                 WHERE m.id>? AND m.sender_id<>?
                   AND (m.recipient_id=? OR m.recipient_id IS NULL)
                 ORDER BY m.id LIMIT 50''',(cursor,uid,uid)).fetchall())
+        rooms=db.execute("""SELECT CASE WHEN m.recipient_id IS NULL THEN 'general'
+                   WHEN m.sender_id=? THEN 'dm:'||m.recipient_id ELSE 'dm:'||m.sender_id END room_key,
+                   MAX(m.id) last_id FROM chat_messages m
+                   WHERE m.recipient_id IS NULL OR m.sender_id=? OR m.recipient_id=?
+                   GROUP BY room_key""",(uid,uid,uid)).fetchall()
+        pinned=db.execute('SELECT room_key FROM chat_pins WHERE user_id=?',(uid,)).fetchall()
         # If there are more than 50 notices, the next poll continues instead of skipping them.
         next_cursor=notices[-1]['id'] if len(notices)==50 else latest
         self.send_json({'direct':{str(x['peer_id']):x['unread'] for x in direct},
-                        'general':general,'notices':notices,'cursor':next_cursor})
+                        'general':general,'notices':notices,'cursor':next_cursor,
+                        'rooms':{r['room_key']:r['last_id'] for r in rooms},
+                        'pinned':[r['room_key'] for r in pinned]})
     def chat_read(self,db,user,data):
         room=data.get('room')
         if room=='general':
@@ -1131,6 +1376,10 @@ class Handler(BaseHTTPRequestHandler):
             else:raise APIError(400,'Аватар должен быть PNG, JPEG или WebP')
             image=base64.b64encode(raw).decode('ascii')
         else:raise APIError(400,'Выберите файл изображения или укажите HTTPS-ссылку')
+        if 'expected_revision' in data:
+            previous=db.execute('SELECT revision FROM user_avatars WHERE user_id=?',(user['id'],)).fetchone()
+            if type(data['expected_revision'])!=int or data['expected_revision']!=(previous[0] if previous else 0):
+                raise APIError(409,'Фото профиля уже изменилось в другой вкладке. Обновите страницу')
         db.execute('''INSERT INTO user_avatars(user_id,image_b64,mime,image_url,revision)
             VALUES(?,?,?,?,1) ON CONFLICT(user_id) DO UPDATE SET
             image_b64=excluded.image_b64,mime=excluded.mime,image_url=excluded.image_url,
