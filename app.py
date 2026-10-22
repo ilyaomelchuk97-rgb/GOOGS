@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parent
 DB = ROOT / 'worktrack.sqlite3'
 BACKUP_DIR = ROOT / 'backups'
 DB_LOCK = threading.RLock()
-BUILD_ID = '20261020-44'  # Public /health marker to verify which build Render actually serves.
+BUILD_ID = '20261020-46'  # Public /health marker to verify which build Render actually serves.
 # New effects reuse the existing CHECK(kind IN ('people','speech')) table safely.
 # This keeps old production D1/SQLite backups and schema compatible.
 PRANK_EFFECT_PREFIX = '\x1eFORMA_EFFECT_V1:'
@@ -740,6 +740,7 @@ class Handler(BaseHTTPRequestHandler):
         """Read-only post-deploy diagnostics on the real running process and its D1."""
         required=('/index.html','/main.js','/styles.css','/effect-snake.png')
         missing=[name for name in required if not (ROOT/'web'/name[1:]).is_file()]
+        if not sotipb.SUMMARY_LAYOUT.is_file():missing.append('sotipb-summary-layout.xlsx')
         index=(ROOT/'web'/'index.html').read_text(encoding='utf-8')
         try:
             if isinstance(db,d1_store.D1Connection):d1_store.require_complete_schema(db)

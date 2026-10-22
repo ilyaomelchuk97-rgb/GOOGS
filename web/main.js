@@ -132,7 +132,7 @@ function chatDecor(raw,frame=false){
  const effect=s.border_effect||0;
  if(effect<21||effect>26)return ornaments;
  const image={21:'snake',22:'comet',23:'firefly',24:'electric',25:'rain',26:'aurora'}[effect];
- return ornaments+`<span class="chat-edge-runner runner-${effect}" aria-hidden="true"><img src="/effect-${image}.png?v=20261020-44" alt="" draggable="false"></span>`;
+ return ornaments+`<span class="chat-edge-runner runner-${effect}" aria-hidden="true"><img src="/effect-${image}.png?v=20261020-46" alt="" draggable="false"></span>`;
 }
 function updateEdgeRunners(){
  document.querySelectorAll('.chat-edge-runner').forEach(runner=>{

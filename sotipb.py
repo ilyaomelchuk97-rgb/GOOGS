@@ -7,7 +7,9 @@ import io
 import re
 import zipfile
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from copy import copy
+from pathlib import Path
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.comments import Comment
 from openpyxl.utils import get_column_letter
 
@@ -21,6 +23,7 @@ HEADERS=[
  'Тип ПОО для свода (уточнение)','L, м для свода (уточнение)',
  'D, мм для свода (уточнение)']
 BASE=15
+SUMMARY_LAYOUT=Path(__file__).with_name('sotipb-summary-layout.xlsx')
 MAX_INPUT=3*1024*1024
 MAX_ROWS=5000
 MAX_EXPANDED=30*1024*1024
@@ -121,29 +124,6 @@ def template():
     for col,example in hints.items():sheet.cell(1,col).comment=Comment('Вводите данные начиная со строки 2. '+example+'; пустые ячейки допускаются, но в своде не будут заполняться догадками.','Forma')
     stream=io.BytesIO();book.save(stream);book.close();return stream.getvalue()
 
-def _summary_style(sheet):
-    sheet.sheet_view.showGridLines=False;sheet.freeze_panes='C5'
-    for col,width in zip('ABCDEFGHIJ',[50.43,46.71,23.57,24.57,24.14,13.14,37.43,12,18,19]):sheet.column_dimensions[col].width=width
-    for region in ('A1:A3','B1:B3','C1:D2','E1:E2','F1:F2','G1:G2','H1:J1'):sheet.merge_cells(region)
-    titles={(1,1):'Тип (марка) ПОО',(1,2):'Адреса ПОО',(1,3):'Основные технические характеристики',
-        (1,5):'Заводской номер, номер проекта',(1,6):'Год изготовления',
-        (1,7):'Наименование организации изготовителя ПОО',(1,8):'Регистрационный номер ПОО',
-        (2,8):'Индекс структурного подразделения, зарегистрировавшего ПОО',
-        (2,9):'№ журнала регистр. ПОО',(2,10):'Порядковый номер в журнале регистрации ПОО',
-        (3,3):'L, м',(3,4):'D, мм'}
-    for (r,c),value in titles.items():sheet.cell(r,c).value=value
-    for c,n in enumerate((1,3,4,5,5,6,7,8,9,10),1):sheet.cell(4,c).value=n
-    for row in sheet.iter_rows(min_row=1,max_row=4,max_col=10):
-        for cell in row:
-            cell.font=Font(name='Arial',size=10,bold=True,color='173D39')
-            cell.fill=PatternFill('solid',fgColor='D9EDE5')
-            cell.alignment=Alignment(horizontal='center',vertical='center',wrap_text=True)
-            cell.border=Border(bottom=Side(style='thin',color='87A99B'))
-    for r in (1,2,3):sheet.row_dimensions[r].height=35
-    sheet.row_dimensions[4].height=24
-    sheet.sheet_properties.pageSetUpPr.fitToPage=True;sheet.page_setup.orientation='landscape';sheet.page_setup.fitToWidth=1
-    sheet.print_title_rows='1:4'
-
 def convert(blob):
     if not blob.startswith(b'PK\x03\x04') or len(blob)>MAX_INPUT:raise ConversionError('Нужен XLSX размером до 3 МБ')
     try:
@@ -178,14 +158,17 @@ def convert(blob):
             rows.append(row)
             if len(rows)>MAX_ROWS:raise ConversionError('Свыше 5000 строк данных: разделите исходный файл на части')
         if not rows:raise ConversionError('В «лист 1» нет заполненных строк под заголовком')
-        result=Workbook();input_sheet=result.active;input_sheet.title='лист 1';_source_style(input_sheet)
+        if not SUMMARY_LAYOUT.is_file():
+            raise ConversionError('Не опубликован файл оформления sotipb-summary-layout.xlsx. Загрузите его в корень GitHub')
+        result=load_workbook(SUMMARY_LAYOUT);input_sheet=result.create_sheet('лист 1',0);_source_style(input_sheet)
         for index,row in enumerate(rows,2):
             for col,text in enumerate(row.raw,1):
                 cell=input_sheet.cell(index,col);_safe_write(cell,text)
                 if isinstance(text,(dt.datetime,dt.date)):cell.number_format='DD.MM.YYYY'
             input_sheet.row_dimensions[index].height=30
         input_sheet.auto_filter.ref=f'A1:R{len(rows)+1}'
-        summary=result.create_sheet('свод 1');_summary_style(summary)
+        summary=result['свод 1']
+        body_styles=[copy(summary.cell(5,c)._style) for c in range(1,11)]
         groups=[]
         for row in rows:
             key=tuple(row[i].casefold() for i in (1,2,3))
@@ -201,14 +184,16 @@ def convert(blob):
                 if row[1]:numbers.append('арх. № '+row[1])
                 if row[2]:numbers.append('нов. арх. № '+row[2])
                 if numbers:address+='\n('+ '; '.join(numbers)+')'
-                output=[dtype,address,row[16] or _change(row[5]),_diameter(row),row[9],_year(row[10]),row[11],'','','']
+                length=row[16] or (row.raw[5] if isinstance(row.raw[5],(int,float)) and not isinstance(row.raw[5],bool) else _change(row[5]))
+                year=row.raw[10] if isinstance(row.raw[10],(int,float)) and not isinstance(row.raw[10],bool) else _year(row[10])
+                output=[dtype,address,length,_diameter(row),row[9],year,row[11],'','','']
                 for col,text in enumerate(output,1):
                     cell=summary.cell(line,col);_safe_write(cell,text)
-                    cell.font=Font(name='Arial',size=10,color='243C38')
-                    cell.alignment=Alignment(vertical='center',wrap_text=True)
-                    cell.fill=PatternFill('solid',fgColor='FFFFFF' if (len(groups)%2) else 'F7FAF8')
-                    cell.border=Border(bottom=Side(style='hair',color='BBD0C6'))
-                summary.row_dimensions[line].height=max(42,min(100,32+13*max((len(x)//50+x.count('\n')) for x in output)))
+                    # The actual sample's unfilled, black medium-border cells:
+                    # copy the clean visual template, not the application's green UI style.
+                    cell._style=copy(body_styles[col-1])
+                    if isinstance(text,str) and '\n' in text and not cell.alignment.wrap_text:
+                        aligned=copy(cell.alignment);aligned.wrap_text=True;cell.alignment=aligned
                 line+=1
             end=line-1
             # Merge only shared, identical group values; preserve differing types and
@@ -222,8 +207,8 @@ def convert(blob):
                 while stop<end and summary.cell(stop+1,1).value==summary.cell(run,1).value:stop+=1
                 if stop>run and summary.cell(run,1).value:summary.merge_cells(start_row=run,start_column=1,end_row=stop,end_column=1)
                 run=stop+1
-        summary.print_options.horizontalCentered=True
-        summary.print_area=f'A1:J{line-1}'
+        # Leave print settings, widths, default row heights and header merges
+        # exactly as in the supplied summary sheet.
         stream=io.BytesIO();result.save(stream);result.close()
         return stream.getvalue(), {'rows':len(rows),'groups':len(groups),'warnings':warnings[:100], 'warning_count':len(warnings)}
     finally:book.close()
