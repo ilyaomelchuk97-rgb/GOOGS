@@ -32,6 +32,29 @@ CREATE TABLE IF NOT EXISTS users (
           hours REAL NOT NULL CHECK(hours BETWEEN 0 AND 24),
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           PRIMARY KEY(user_id,day));
+        CREATE TABLE IF NOT EXISTS group_chats (
+         id INTEGER PRIMARY KEY, title TEXT NOT NULL, created_by INTEGER NOT NULL REFERENCES users(id),
+         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS group_members (
+         group_id INTEGER NOT NULL REFERENCES group_chats(id), user_id INTEGER NOT NULL REFERENCES users(id),
+         joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(group_id,user_id));
+        CREATE TABLE IF NOT EXISTS group_messages (
+         id INTEGER PRIMARY KEY, group_id INTEGER NOT NULL REFERENCES group_chats(id),
+         sender_id INTEGER NOT NULL REFERENCES users(id), body TEXT NOT NULL,
+         style_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE INDEX IF NOT EXISTS idx_group_messages_room ON group_messages(group_id,id);
+        CREATE TABLE IF NOT EXISTS call_sessions (
+         id INTEGER PRIMARY KEY, room_key TEXT NOT NULL, mode TEXT NOT NULL,
+         created_by INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'active',
+         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS call_participants (
+         call_id INTEGER NOT NULL REFERENCES call_sessions(id), user_id INTEGER NOT NULL,
+         connection_id TEXT NOT NULL, last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         PRIMARY KEY(call_id,connection_id));
+        CREATE TABLE IF NOT EXISTS call_signals (
+         id INTEGER PRIMARY KEY, call_id INTEGER NOT NULL REFERENCES call_sessions(id),
+         sender_conn TEXT NOT NULL, target_conn TEXT NOT NULL, signal_json TEXT NOT NULL,
+         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS chat_messages (
           id INTEGER PRIMARY KEY, sender_id INTEGER NOT NULL REFERENCES users(id),
           recipient_id INTEGER REFERENCES users(id), body TEXT NOT NULL,

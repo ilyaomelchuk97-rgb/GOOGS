@@ -114,10 +114,10 @@ class D1Connection:
 # Parents first for inserts, children first for deletes. Volatile login/presence tables
 # are intentionally not copied; users log in again after migration or restore.
 TABLES=('users','tasks','entries','cell_comments','attendance','daily_hours',
-        'personal_hours','activity','chat_messages','chat_reads','chat_themes','chat_pins','vacation_schedule','sotipb_runs','sotipb_parts','user_avatars',
-        'sessions','prank_presence','prank_events')
+        'personal_hours','activity','group_chats','group_members','group_messages','chat_messages','chat_reads','chat_themes','chat_pins','vacation_schedule','sotipb_runs','sotipb_parts','user_avatars',
+        'sessions','prank_presence','prank_events','call_sessions','call_participants','call_signals')
 # Only temporary session/event tables and avatars are intentionally excluded from ZIP.
-EXCLUDED_FROM_BACKUP=frozenset(('sessions','prank_presence','prank_events','user_avatars'))
+EXCLUDED_FROM_BACKUP=frozenset(('sessions','prank_presence','prank_events','user_avatars','call_sessions','call_participants','call_signals'))
 
 def require_complete_schema(con):
     """Fail closed if a future data table is not part of the D1 backup/restore map."""
@@ -205,7 +205,12 @@ def replace_atomic(remote, source):
             row=remote.execute('SELECT payload FROM restore_stage WHERE transfer_id=? AND table_name=? AND chunk_no=?',
                                (transfer_id,table,part)).fetchone()
             if not row or row[0]!=payload:raise RemoteError('Staged D1 data failed verification; live records were not changed')
-        statements=[{'sql':'DELETE FROM "'+t+'"','params':[]} for t in reversed(TABLES)]
+        # 40 D1 statements exactly: 22 deletes (including user-linked volatile
+        # tables), 18 persistent inserts. Call tables have no user FK and are
+        # cleared after the committed swap, so no persistent data changes early.
+        final_deletes=[t for t in reversed(TABLES) if t not in
+                       ('call_sessions','call_participants','call_signals')]
+        statements=[{'sql':'DELETE FROM "'+t+'"','params':[]} for t in final_deletes]
         for table in TABLES:
             if table in EXCLUDED_FROM_BACKUP:continue
             cols=[r[1] for r in source.execute('PRAGMA table_info("'+table+'")')]
@@ -215,10 +220,17 @@ def replace_atomic(remote, source):
                  ' FROM restore_stage s, json_each(s.payload) j WHERE s.transfer_id=? AND s.table_name=?'+
                  ' ORDER BY s.chunk_no,CAST(j.key AS INTEGER)')
             statements.append({'sql':sql,'params':[transfer_id,table]})
-        statements.append({'sql':'DELETE FROM restore_stage WHERE transfer_id=?','params':[transfer_id]})
         if len(statements)>40:raise RemoteError('Too many D1 statements for atomic restore')
         remote.commit()
         remote._post('/v1/batch',{'statements':statements})
+        # The live business swap has succeeded. Volatile call sessions and staged
+        # chunks can be cleared independently; never retry the committed swap.
+        try:
+            remote.query('DELETE FROM call_signals')
+            remote.query('DELETE FROM call_participants')
+            remote.query('DELETE FROM call_sessions')
+            remote.query('DELETE FROM restore_stage WHERE transfer_id=?',(transfer_id,))
+        except Exception:pass
     except Exception:
         # Do not retry a final batch after a network error: it may have committed.
         # Leftover stage data is private and expires on the next restore.

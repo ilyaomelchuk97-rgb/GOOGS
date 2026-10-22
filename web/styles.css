@@ -606,3 +606,20 @@ button.vacation-cell:hover,button.vacation-cell:focus-visible{outline:2px solid 
 .sotipb-history-row b{display:block;overflow-wrap:anywhere}.sotipb-history-row small{display:block;margin-top:4px;color:#648179;line-height:1.4}
 .sotipb-history-actions{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;flex-shrink:0}
 @media(max-width:850px){.sotipb-panels{grid-template-columns:1fr}.sotipb-history-row{align-items:flex-start;flex-direction:column}.sotipb-history-actions{justify-content:flex-start}}
+/* Private chat editor and optional video calls */
+.group-editor{padding:18px;background:#eef8f6;border:1px solid #b9d9cf;display:grid;gap:10px;max-height:42vh;overflow:auto}
+.group-editor label{display:block}.group-editor input[name="title"]{width:100%;padding:10px;border:1px solid #aabbb6;border-radius:8px}
+.group-member-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;max-height:160px;overflow:auto}
+.group-member-list label{padding:8px;border:1px solid #d4e1de;border-radius:8px;background:white}
+.chat-rooms>[data-action="group-create"]{margin:12px;width:calc(100% - 24px)}
+#call-root{position:fixed;z-index:500;right:14px;bottom:14px;display:grid;gap:8px;max-width:calc(100vw - 28px)}
+.call-invitation{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:14px;background:#113548;color:#fff;border-radius:14px;box-shadow:0 12px 35px #091b2980;max-width:400px}
+.call-invitation span{width:100%;font-size:13px}
+.call-panel{background:#112b3b;color:#fff;border-radius:16px;box-shadow:0 14px 48px #08162299;width:min(920px,calc(100vw - 28px));max-height:85vh;overflow:auto;padding:16px}
+.call-panel header,.call-panel footer{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px}.call-panel header strong{flex:1}
+.call-panel .call-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:10px;max-height:50vh;overflow:auto}
+.call-tile{position:relative;min-height:145px;border-radius:10px;background:#1f4052;overflow:hidden;display:grid;place-items:center}
+.call-tile video{width:100%;height:100%;max-height:34vh;object-fit:contain;background:#081722}.call-tile strong{position:absolute;bottom:8px;left:8px;background:#06212fcc;border-radius:6px;padding:3px 7px;font-size:12px}
+.call-panel footer{margin:12px 0}.call-panel label{font-size:12px}.call-panel select{padding:8px;border-radius:6px;max-width:190px}
+.call-note{font-size:12px;color:#d3e4e6;line-height:1.5;margin:0}
+@media(max-width:640px){.call-panel{max-height:72vh}.call-panel .call-tiles{max-height:35vh}.chat-head-actions{flex-wrap:wrap}}

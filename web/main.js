@@ -12,8 +12,8 @@ function logDate(d){if(!d)return '';return new Date(d.replace(' ','T')+'Z').toLo
 function dayTime(d){if(!d)return '';const date=new Date(d.replace(' ','T')+'Z');return logDate(d)+' · '+date.toLocaleTimeString('ru-RU',{timeZone:'Europe/Minsk',hour:'2-digit',minute:'2-digit'})}
 function dateShift(date,days){let d=new Date(date+'T12:00:00');d.setDate(d.getDate()+days);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 function dayType(day){const d=new Date(day+'T12:00:00').getDay();return d!==0&&d!==6}
-const S={user:null,data:null,month:null,today:null,page:'overview',report:null,logs:null,search:'',userFilter:'',categoryFilter:'',menuOpen:false,modal:null,attendanceChoice:'absent',prankOnline:[],prankTarget:null,presencePeople:[],presenceOnline:false,presenceOpen:false,backupStatus:null,backupPreview:null,backupFile:null,deployCheck:null,saveNotice:null,sotipbHistory:null,sotipbFile:null,sotipbResult:null,chatRoom:'general',chatData:null,chatOrder:{},chatPins:[],vacationYear:null,vacationData:null,vacationPrintOpen:false,vacationFile:null,vacationImportPreview:null,vacationOverrides:{},messageStyle:{},roomDraft:null,chatThemeExpected:null,chatDesignOpen:null,avatarPreview:null,avatarPreviewFocus:null,unread:{direct:{},general:0}};
-const avatarCache=new Map();let chatStatusCursor=null,chatStatusBusy=false;
+const S={user:null,data:null,month:null,today:null,page:'overview',report:null,logs:null,search:'',userFilter:'',categoryFilter:'',menuOpen:false,modal:null,attendanceChoice:'absent',prankOnline:[],prankTarget:null,presencePeople:[],presenceOnline:false,presenceOpen:false,backupStatus:null,backupPreview:null,backupFile:null,deployCheck:null,saveNotice:null,sotipbHistory:null,sotipbFile:null,sotipbResult:null,chatRoom:'general',chatData:null,chatOrder:{},chatPins:[],vacationYear:null,vacationData:null,vacationPrintOpen:false,vacationFile:null,vacationImportPreview:null,vacationOverrides:{},messageStyle:{},roomDraft:null,chatThemeExpected:null,chatDesignOpen:null,avatarPreview:null,avatarPreviewFocus:null,unread:{direct:{},general:0,groups:{}} ,groups:[],groupEditor:false,calls:[]};
+const avatarCache=new Map();let chatStatusCursor=null,groupStatusCursor=null,chatStatusBusy=false;
 function avatarHTML(person){
  const name=esc(initials(person?.name)),url=person?.avatar_url;
  if(url&&/^https:\/\//i.test(url))return `<span class="avatar-initials">${name}</span><img class="avatar-photo" src="${esc(url)}" alt="" referrerpolicy="no-referrer" loading="lazy">`;
@@ -92,8 +92,8 @@ function renderAvatarPreview(){
  hydrateAvatars();root.querySelector('.avatar-lightbox-close')?.focus();
 }
 function unreadCount(room){return room==='general'?Number(S.unread.general||0):room==='all'?
- Number(S.unread.general||0)+Object.values(S.unread.direct||{}).reduce((sum,n)=>sum+Number(n),0):
- Number(S.unread.direct?.[room]||0)}
+ Number(S.unread.general||0)+Object.values(S.unread.direct||{}).reduce((sum,n)=>sum+Number(n),0)+Object.values(S.unread.groups||{}).reduce((sum,n)=>sum+Number(n),0):
+ room.startsWith('group:')?Number(S.unread.groups?.[room]||0):Number(S.unread.direct?.[room]||0)}
 function unreadBadge(room){const n=unreadCount(room);return `<span class="chat-unread" data-unread-room="${esc(room)}" ${n?'':'hidden'}>${n>99?'99+':n}</span>`}
 function updateUnreadUI(){document.querySelectorAll('[data-unread-room]').forEach(badge=>{const n=unreadCount(badge.dataset.unreadRoom);badge.hidden=!n;badge.textContent=n>99?'99+':String(n)})}
 // Safe catalogue: 26 border effects, 20 flowers, 20 branches, 20 logo frames.
@@ -205,7 +205,7 @@ function applyRoomTheme(){
   if(decorations.dataset.signature!==signature){decorations.innerHTML=chatDecor(theme,true);decorations.dataset.signature=signature}}
  updateEdgeRunners();
 }
-function resetChatSession(){chatStatusCursor=null;chatStatusBusy=false;S.unread={direct:{},general:0};S.chatOrder={};S.chatPins=[];S.messageStyle={};S.roomDraft=null;S.chatThemeExpected=null;S.chatDesignOpen=null;clearAvatarCache()}
+function resetChatSession(){if(typeof resetCallUi==='function')resetCallUi();chatStatusCursor=null;groupStatusCursor=null;chatStatusBusy=false;S.groups=[];S.groupEditor=false;S.chatRoom='general';S.chatData=null;S.calls=[];S.unread={direct:{},general:0,groups:{}};S.chatOrder={};S.chatPins=[];S.messageStyle={};S.roomDraft=null;S.chatThemeExpected=null;S.chatDesignOpen=null;clearAvatarCache()}
 let authToken='',tokenInUrl=false;
 try{authToken=sessionStorage.getItem('forma-session')||''}catch{}
 function setToken(token){if((token||'')!==authToken)resetChatSession();authToken=token||'';tokenInUrl=false;try{if(authToken)sessionStorage.setItem('forma-session',authToken);else sessionStorage.removeItem('forma-session')}catch{}}
@@ -405,14 +405,14 @@ function entriesPage(){
 let chatTimer=null,chatBusy=false;
 function chatRoomsHTML(){
  const people=S.chatData?.users||[],pinned=new Set(S.chatPins),activity=S.chatOrder||{};
- const rooms=[{key:'general',name:'Общий чат',group:true},...people.map(u=>({...u,key:String(u.id)}))];
- const key=r=>r.group?'general':'dm:'+r.key;
+ const rooms=[{key:'general',name:'Общий чат',group:true},...(S.groups||[]).map(g=>({key:'group:'+g.id,name:g.title,privateGroup:true,member_count:g.member_count})),...people.map(u=>({...u,key:String(u.id)}))];
+ const key=r=>r.group?'general':r.privateGroup?r.key:'dm:'+r.key;
  rooms.sort((a,b)=>Number(pinned.has(key(b)))-Number(pinned.has(key(a)))||
     Number(activity[key(b)]||0)-Number(activity[key(a)]||0)||a.name.localeCompare(b.name,'ru'));
  return rooms.map(u=>{
   const room=u.key,pin=pinned.has(key(u));
-  const avatar=u.group?`<span class="chat-room-avatar group">${ic('users')}</span>`:avatarButton(u,'chat-room-avatar','Открыть фото профиля');
-  const label=u.group?'Вся команда':`${u.role==='admin'?'Администратор':'Сотрудник'}${S.presencePeople.some(p=>p.id===u.id)?' · в сети':''}`;
+  const avatar=u.group||u.privateGroup?`<span class="chat-room-avatar group">${ic('users')}</span>`:avatarButton(u,'chat-room-avatar','Открыть фото профиля');
+  const label=u.privateGroup?`Закрытая беседа · ${u.member_count} участников`:u.group?'Вся команда':`${u.role==='admin'?'Администратор':'Сотрудник'}${S.presencePeople.some(p=>p.id===u.id)?' · в сети':''}`;
   return `<div class="chat-room ${u.group?'chat-room-general':'chat-room-person'} ${S.chatRoom===room?'selected':''}">${avatar}<button type="button" class="chat-room-open" data-action="chat-room" data-room="${esc(room)}"><span class="chat-room-meta"><span class="chat-room-name"><b>${esc(u.name)}</b>${unreadBadge(room)}</span><small>${esc(label)}</small></span></button><button type="button" class="chat-pin ${pin?'is-pinned':''}" data-action="chat-pin" data-room="${esc(room)}" aria-label="${pin?'Открепить':'Закрепить'} чат ${esc(u.name)}" title="${pin?'Открепить':'Закрепить'}">${pin?'★':'☆'}</button></div>`;
  }).join('');
 }
@@ -421,14 +421,20 @@ function chatMessagesHTML(){
  return messages.length?(S.chatData?.hasMore?'<button type="button" class="chat-load-older" data-action="chat-older">Показать более ранние сообщения</button>':'')+messages.map(m=>{const paint=chatPaint(m.style);return `<div class="chat-message-line ${m.sender_id===S.user.id?'own':''}">${avatarButton(m.sender_id===S.user.id?S.user:{id:m.sender_id,name:m.sender_name,avatar_revision:m.avatar_revision,avatar_url:m.avatar_url,avatar_stored:m.avatar_stored},'chat-room-avatar chat-message-avatar')}<div class="chat-bubble ${m.sender_id===S.user.id?'own':''} ${paint.classes}" style="${paint.style}"><b>${esc(m.sender_id===S.user.id?'Вы':m.sender_name)}</b><p>${esc(m.body)}</p><small>${esc(dayTime(m.created_at))}</small>${chatDecor(m.style)}</div></div>`}).join('')
    :`<div class="chat-empty">${ic('message')}<b>Пока нет сообщений</b><span>Напишите первым — сообщение увидят участники этой беседы.</span></div>`;
 }
+function groupEditorHTML(){
+ const g=S.groupEditor==='edit'?S.chatData?.group:null;
+ return `<form id="group-form" class="group-editor"><b>${g?'Управление составом':'Создать закрытую беседу'}</b><label>Название <input name="title" maxlength="80" required minlength="2" value="${esc(g?.title||'')}"></label>
+ <div class="group-member-list" role="group" aria-label="Участники">${(S.chatData?.users||[]).map(u=>`<label><input type="checkbox" name="members" value="${u.id}" ${g?.members.includes(u.id)?'checked':''}> ${esc(u.name)}</label>`).join('')}</div>
+ <small>Минимум три других сотрудника. Сообщения и звонки доступны только участникам; состав меняет создатель.</small><div><button class="btn primary" type="submit">Сохранить</button> <button class="btn secondary" type="button" data-action="group-cancel">Отмена</button></div></form>`;
+}
 function chatPage(){
- const person=S.chatData?.users.find(u=>String(u.id)===S.chatRoom);
- const title=S.chatRoom==='general'?'Общий чат':person?.name||'Личная переписка';
+ const person=S.chatData?.users.find(u=>String(u.id)===S.chatRoom),group=S.chatData?.group;
+ const title=group?.title||(S.chatRoom==='general'?'Общий чат':person?.name||'Личная переписка');
  const paint=chatPaint(S.chatData?.theme,true);
  return `${head('ОБЩЕНИЕ','Чат','Личные переписки и общий чат команды. Сообщения сохраняются в базе.')}
-  <div class="chat-layout card ${paint.classes}" style="${paint.style}"><div class="chat-frame-decor" id="chat-frame-decor" aria-hidden="true">${chatDecor(S.chatData?.theme,true)}</div><aside class="chat-rooms" aria-label="Беседы"><h2>Беседы</h2><div id="chat-rooms-list">${chatRoomsHTML()}</div></aside>
-  <section class="chat-panel" aria-label="${esc(title)}"><div class="chat-panel-head">${S.chatRoom==='general'?`<span class="chat-room-avatar group">${ic('users')}</span>`:avatarButton(person||{id:Number(S.chatRoom),name:title},'chat-room-avatar')}<div class="chat-panel-head-label"><b>${esc(title)}</b><small>${S.chatRoom==='general'?'Сообщения видны всей команде':'Сообщения видны только вам двоим'}</small></div><div class="chat-head-actions"><button type="button" class="btn secondary chat-design-trigger" data-action="chat-design-message" title="Оформление новых сообщений">✦ Оформление</button><button type="button" class="btn secondary chat-design-trigger" data-action="chat-design-room" title="Изменить рамку беседы для всех">✧ Рамка чата</button></div></div>
-  <div class="chat-messages" id="chat-messages" role="log" aria-label="Сообщения" aria-live="polite">${chatMessagesHTML()}</div>
+  <div class="chat-layout card ${paint.classes}" style="${paint.style}"><div class="chat-frame-decor" id="chat-frame-decor" aria-hidden="true">${chatDecor(S.chatData?.theme,true)}</div><aside class="chat-rooms" aria-label="Беседы"><h2>Беседы</h2><div id="chat-rooms-list">${chatRoomsHTML()}</div><button type="button" class="btn secondary" data-action="group-create">+ Закрытая беседа</button></aside>
+  <section class="chat-panel" aria-label="${esc(title)}"><div class="chat-panel-head">${S.chatRoom==='general'||group?`<span class="chat-room-avatar group">${ic('users')}</span>`:avatarButton(person||{id:Number(S.chatRoom),name:title},'chat-room-avatar')}<div class="chat-panel-head-label"><b>${esc(title)}</b><small>${group?'Только участники · '+group.members.length+' человек':S.chatRoom==='general'?'Сообщения видны всей команде':'Сообщения видны только вам двоим'}</small></div><div class="chat-head-actions"><button class="btn primary" type="button" data-action="call-start">☎ Видеозвонок</button>${group?.created_by===S.user.id?'<button class="btn secondary" type="button" data-action="group-edit">Участники</button>':''}<button type="button" class="btn secondary chat-design-trigger" data-action="chat-design-message" title="Оформление новых сообщений">✦ Оформление</button><button type="button" class="btn secondary chat-design-trigger" data-action="chat-design-room" title="Изменить рамку беседы для всех">✧ Рамка чата</button></div></div>
+  ${S.groupEditor?groupEditorHTML():''}<div class="chat-messages" id="chat-messages" role="log" aria-label="Сообщения" aria-live="polite">${chatMessagesHTML()}</div>
   ${S.chatDesignOpen?`<div class="chat-style-editor" id="chat-style-editor">${chatEditorHTML(S.chatDesignOpen)}</div>`:''}
   <form id="chat-form" class="chat-composer"><label class="sr-only" for="chat-text">Ваше сообщение</label><textarea id="chat-text" name="message" maxlength="2000" rows="2" placeholder="Напишите сообщение…" required></textarea><button class="btn primary" type="submit">${ic('arrow')} Отправить</button></form></section></div>`;
 }
@@ -453,7 +459,7 @@ async function fetchChat(initial=false){
   const result=await api('/api/chat?room='+encodeURIComponent(room)+(after!=null?'&after='+after:''));
   if(S.chatRoom!==room||S.page!=='chat')return false;
   const messages=after!=null?[...old.messages,...result.messages.filter(x=>x.id>old.lastId)]:result.messages;
-  S.chatData={room,messages,users:result.users,lastId:messages.at(-1)?.id||0,
+  S.chatData={room,messages,users:result.users,group:result.group,lastId:messages.at(-1)?.id||0,
               theme:normalizedStyle(result.theme),hasMore:after!=null?old.hasMore:result.has_more};
   if(!document.hidden)await markChatRead(room);
   return true;
@@ -468,6 +474,7 @@ async function markChatRead(room){
  await api('/api/chat/read','POST',{room,up_to:S.chatData.lastId});
  if(S.chatRoom!==room||S.page!=='chat')return;
  if(room==='general')S.unread.general=0;
+ else if(room.startsWith('group:'))delete S.unread.groups[room];
  else delete S.unread.direct[room];
  updateUnreadUI();
 }
@@ -475,16 +482,22 @@ async function pollChatStatus(){
  if(!S.user||document.hidden||chatStatusBusy)return;
  chatStatusBusy=true;
  try{
-  const query=chatStatusCursor===null?'':'?after='+chatStatusCursor;
+  const query=chatStatusCursor===null?'':'?after='+chatStatusCursor+(groupStatusCursor==null?'':'&group_after='+groupStatusCursor);
   const status=await api('/api/chat/status'+query);
   if(!S.user)return;
-  chatStatusCursor=status.cursor;
-  S.unread={direct:status.direct||{},general:Number(status.general)||0};
-  S.chatOrder=status.rooms||{};S.chatPins=status.pinned||[];
+  chatStatusCursor=status.cursor;groupStatusCursor=status.group_cursor;
+  S.groups=status.groups||[];S.unread={direct:status.direct||{},general:Number(status.general)||0,groups:Object.fromEntries(S.groups.map(g=>['group:'+g.id,g.unread]))};
+  if(S.chatRoom.startsWith('group:')&&!S.groups.some(g=>'group:'+g.id===S.chatRoom)){
+   S.chatRoom='general';S.chatData=null;S.groupEditor=false;
+   if(S.page==='chat'){render();fetchChat(true).then(()=>render()).catch(err=>notify(err.message,true))}
+   notify('Вы больше не участник закрытой беседы');
+  }
+  S.chatOrder={...(status.rooms||{}),...Object.fromEntries(S.groups.map(g=>['group:'+g.id,g.last_id]))};S.chatPins=status.pinned||[];
   updateUnreadUI();
   if(S.page==='chat'){const rooms=$('#chat-rooms-list');if(rooms){rooms.innerHTML=chatRoomsHTML();hydrateAvatars()}}
   // The first status request shows counts but never replays old messages as popups.
   for(const message of status.notices)notify('Пришло новое сообщение от: '+message.sender_name);
+  for(const message of status.group_notices||[])notify('Новое сообщение в закрытой беседе от: '+message.sender_name);
  }finally{chatStatusBusy=false}
 }
 function stopChatPolling(){if(chatTimer)clearInterval(chatTimer);chatTimer=null;S.chatData=null}
@@ -884,7 +897,7 @@ function saveBackupBlob(response,name){
   document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),20000);
  });
 }
-document.addEventListener('submit',async e=>{if(e.target.id==='login-form'){e.preventDefault();const form=e.target,btn=form.querySelector('button');btn.disabled=true;$('#login-error').textContent='';try{const d=Object.fromEntries(new FormData(form).entries());const res=await api('/api/login','POST',d);setToken(res.session_token);S.user=res.user;S.page='overview';await load();startPrankPolling()}catch(err){$('#login-error').textContent=err.message}finally{btn.disabled=false}}else if(e.target.id==='modal-form'){e.preventDefault();await saveModal(e.target)}else if(e.target.id==='chat-form'){e.preventDefault();const form=e.target,input=form.querySelector('textarea'),body=input.value.trim(),button=form.querySelector('button[type=submit]');if(!body)return;button.disabled=true;try{await api('/api/chat','POST',{recipient_id:S.chatRoom==='general'?null:Number(S.chatRoom),body,style:normalizedStyle(S.messageStyle)});input.value='';await fetchChat();updateChatView();const box=$('#chat-messages');if(box)box.scrollTop=box.scrollHeight;input.focus()}catch(err){notify(err.message,true)}finally{button.disabled=false}}});
+document.addEventListener('submit',async e=>{if(e.target.id==='login-form'){e.preventDefault();const form=e.target,btn=form.querySelector('button');btn.disabled=true;$('#login-error').textContent='';try{const d=Object.fromEntries(new FormData(form).entries());const res=await api('/api/login','POST',d);setToken(res.session_token);S.user=res.user;S.page='overview';await load();startPrankPolling()}catch(err){$('#login-error').textContent=err.message}finally{btn.disabled=false}}else if(e.target.id==='modal-form'){e.preventDefault();await saveModal(e.target)}else if(e.target.id==='group-form'){e.preventDefault();const form=e.target;const title=form.querySelector('[name=title]').value.trim(),members=[...form.querySelectorAll('[name=members]:checked')].map(x=>Number(x.value));try{if(S.groupEditor==='create'){const result=await api('/api/chat/groups','POST',{title,members});S.chatRoom=result.room}else{await api('/api/chat/groups/'+S.chatData.group.id,'PATCH',{title,members})}S.groupEditor=false;await pollChatStatus();await fetchChat(true);render();notify('Беседа сохранена')}catch(err){notify(err.message,true)}}else if(e.target.id==='chat-form'){e.preventDefault();const form=e.target,input=form.querySelector('textarea'),body=input.value.trim(),button=form.querySelector('button[type=submit]');if(!body)return;button.disabled=true;try{await api('/api/chat','POST',{...(S.chatRoom.startsWith('group:')?{group_id:Number(S.chatRoom.slice(6))}:{recipient_id:S.chatRoom==='general'?null:Number(S.chatRoom)}),body,style:normalizedStyle(S.messageStyle)});input.value='';await fetchChat();updateChatView();const box=$('#chat-messages');if(box)box.scrollTop=box.scrollHeight;input.focus()}catch(err){notify(err.message,true)}finally{button.disabled=false}}});
 document.addEventListener('click',async e=>{if(S.presenceOpen&&!e.target.closest('.presence-widget')){S.presenceOpen=false;updatePresenceWidget()}const nav=e.target.closest('[data-nav]');if(nav){try{await navigate(nav.dataset.nav)}catch(err){notify(err.message,true)}return}const btn=e.target.closest('[data-action],[data-modal],[data-status]');if(!btn)return;
  if(btn.dataset.action?.startsWith('vacation-')){
   const action=btn.dataset.action;
@@ -947,11 +960,14 @@ document.addEventListener('click',async e=>{if(S.presenceOpen&&!e.target.closest
   }catch(err){notify(err.message,true);btn.disabled=false}return
  }
  if(btn.dataset.action==='chat-pin'){
-  const room=btn.dataset.room,pinned=!S.chatPins.includes(room==='general'?'general':'dm:'+room);
-  try{await api('/api/chat/pin','POST',{room,pinned,expected_pinned:!pinned});S.chatPins=pinned?[...S.chatPins,room==='general'?'general':'dm:'+room]:S.chatPins.filter(key=>key!==(room==='general'?'general':'dm:'+room));
+  const room=btn.dataset.room,key=room==='general'||room.startsWith('group:')?room:'dm:'+room,pinned=!S.chatPins.includes(key);
+  try{await api('/api/chat/pin','POST',{room,pinned,expected_pinned:!pinned});S.chatPins=pinned?[...S.chatPins,key]:S.chatPins.filter(item=>item!==key);
    const list=$('#chat-rooms-list');if(list){list.innerHTML=chatRoomsHTML();hydrateAvatars()}notify(pinned?'Чат закреплён':'Чат откреплён')}
   catch(err){notify(err.message,true)}return
  }
+ if(btn.dataset.action==='group-create'){S.groupEditor='create';render();return}
+ if(btn.dataset.action==='group-edit'){S.groupEditor='edit';render();return}
+ if(btn.dataset.action==='group-cancel'){S.groupEditor=false;render();return}
  if(btn.dataset.action==='chat-room'){if(S.chatRoom===btn.dataset.room)return;S.chatRoom=btn.dataset.room;S.chatData=null;S.chatDesignOpen=null;S.roomDraft=null;try{await fetchChat(true);render();const box=$('#chat-messages');if(box)box.scrollTop=box.scrollHeight}catch(err){notify(err.message,true)}return}
  if(btn.dataset.action==='chat-older'){const data=S.chatData,oldest=data?.messages[0]?.id;if(!data?.hasMore||!oldest)return;const box=$('#chat-messages'),height=box.scrollHeight,top=box.scrollTop;btn.disabled=true;try{const result=await api('/api/chat?room='+encodeURIComponent(data.room)+'&before='+oldest);if(S.chatRoom!==data.room||!S.chatData)return;S.chatData.messages=[...result.messages,...S.chatData.messages];S.chatData.hasMore=result.has_more;updateChatView();box.scrollTop=box.scrollHeight-height+top}catch(err){notify(err.message,true);btn.disabled=false}return}
  if(btn.dataset.action==='presence-toggle'){if(!S.presenceOnline)return;S.presenceOpen=!S.presenceOpen;updatePresenceWidget();if(S.presenceOpen)try{await refreshPresence()}catch{setPresenceOffline()}return}
@@ -965,7 +981,7 @@ document.addEventListener('click',async e=>{if(S.presenceOpen&&!e.target.closest
  if(btn.dataset.action==='close-modal'){if(btn.classList.contains('modal-backdrop')&&e.target!==btn)return;closeModal();return}
  if(btn.dataset.action==='menu'){setMenuOpen(!S.menuOpen);return}if(btn.dataset.action==='close-menu'){setMenuOpen(false);return}
  try{switch(btn.dataset.action){case 'prev-month':case 'next-month':{let [y,m]=S.month.split('-').map(Number);m+=btn.dataset.action==='prev-month'?-1:1;if(m<1){m=12;y--}if(m>12){m=1;y++}if(y<2020||y>Number(S.today.slice(0,4))+1)return;S.month=`${y}-${String(m).padStart(2,'0')}`;await load();break}
- case 'logout':await api('/api/logout','POST');setToken('');S.user=null;S.data=null;stopPrankPolling();stopChatPolling();clearPrankEffect();showLogin();break;
+ case 'logout':if(typeof leaveCall==='function')await leaveCall();await api('/api/logout','POST');setToken('');S.user=null;S.data=null;stopPrankPolling();stopChatPolling();clearPrankEffect();showLogin();break;
  case 'refresh':await load();notify('Данные обновлены');break;
  case 'save-refresh':S.saveNotice=null;await load();notify('Данные обновлены. Проверьте новое значение.');break;
  case 'sotipb-template':await saveBackupBlob(await backupRequest('/api/sotipb/template'),'СОТИПБ-болванка.xlsx');notify('Болванка скачивается');break;

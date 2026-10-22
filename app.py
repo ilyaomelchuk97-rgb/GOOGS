@@ -18,6 +18,9 @@ import secrets
 import sqlite3
 import threading
 import traceback
+import time
+import urllib.request
+import urllib.error
 import backup_tools
 import d1_store
 import vacation
@@ -33,7 +36,8 @@ ROOT = Path(__file__).resolve().parent
 DB = ROOT / 'worktrack.sqlite3'
 BACKUP_DIR = ROOT / 'backups'
 DB_LOCK = threading.RLock()
-BUILD_ID = '20261020-46'  # Public /health marker to verify which build Render actually serves.
+CALL_LAST_CLEANUP = 0.0
+BUILD_ID = '20261020-47'  # Public /health marker to verify which build Render actually serves.
 # New effects reuse the existing CHECK(kind IN ('people','speech')) table safely.
 # This keeps old production D1/SQLite backups and schema compatible.
 PRANK_EFFECT_PREFIX = '\x1eFORMA_EFFECT_V1:'
@@ -92,6 +96,29 @@ def init_db():
           hours REAL NOT NULL CHECK(hours BETWEEN 0 AND 24),
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           PRIMARY KEY(user_id,day));
+        CREATE TABLE IF NOT EXISTS group_chats (
+         id INTEGER PRIMARY KEY, title TEXT NOT NULL, created_by INTEGER NOT NULL REFERENCES users(id),
+         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS group_members (
+         group_id INTEGER NOT NULL REFERENCES group_chats(id), user_id INTEGER NOT NULL REFERENCES users(id),
+         joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(group_id,user_id));
+        CREATE TABLE IF NOT EXISTS group_messages (
+         id INTEGER PRIMARY KEY, group_id INTEGER NOT NULL REFERENCES group_chats(id),
+         sender_id INTEGER NOT NULL REFERENCES users(id), body TEXT NOT NULL,
+         style_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE INDEX IF NOT EXISTS idx_group_messages_room ON group_messages(group_id,id);
+        CREATE TABLE IF NOT EXISTS call_sessions (
+         id INTEGER PRIMARY KEY, room_key TEXT NOT NULL, mode TEXT NOT NULL,
+         created_by INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'active',
+         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS call_participants (
+         call_id INTEGER NOT NULL REFERENCES call_sessions(id), user_id INTEGER NOT NULL,
+         connection_id TEXT NOT NULL, last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         PRIMARY KEY(call_id,connection_id));
+        CREATE TABLE IF NOT EXISTS call_signals (
+         id INTEGER PRIMARY KEY, call_id INTEGER NOT NULL REFERENCES call_sessions(id),
+         sender_conn TEXT NOT NULL, target_conn TEXT NOT NULL, signal_json TEXT NOT NULL,
+         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS chat_messages (
           id INTEGER PRIMARY KEY, sender_id INTEGER NOT NULL REFERENCES users(id),
           recipient_id INTEGER REFERENCES users(id), body TEXT NOT NULL,
@@ -222,13 +249,66 @@ def valid_chat_style(style):
             clean[key]=value
     return clean
 
+def checked_group(db,user,room):
+    if not isinstance(room,str) or not re.fullmatch(r'group:[1-9]\d*',room):
+        raise APIError(400,'Некорректная групповая беседа')
+    group_id=int(room.split(':')[1])
+    row=db.execute('''SELECT g.id,g.title,g.created_by FROM group_chats g
+        JOIN group_members gm ON gm.group_id=g.id
+        WHERE g.id=? AND gm.user_id=?''',(group_id,user['id'])).fetchone()
+    if not row:raise APIError(403,'Вы не участник этой беседы')
+    return row
+
+def call_room_key(db,user,room):
+    if room=='general':return 'general'
+    if isinstance(room,str) and room.startswith('group:'):
+        return 'group:'+str(checked_group(db,user,room)['id'])
+    try:peer=int(room)
+    except (TypeError,ValueError):raise APIError(400,'Некорректный собеседник')
+    if str(peer)!=room or peer<=0 or peer==user['id'] or not db.execute('SELECT 1 FROM users WHERE id=? AND active=1',(peer,)).fetchone():
+        raise APIError(400,'Собеседник не найден')
+    return 'dm:'+str(min(peer,user['id']))+':'+str(max(peer,user['id']))
+
 def chat_theme_key(db,user,room):
     if room=='general':return 'general'
+    if isinstance(room,str) and room.startswith('group:'):return 'group:'+str(checked_group(db,user,room)['id'])
     try: peer=int(room)
     except (TypeError,ValueError):raise APIError(400,'Некорректный собеседник')
     if peer<=0 or str(peer)!=room or peer==user['id'] or not db.execute('SELECT 1 FROM users WHERE id=?',(peer,)).fetchone():
         raise APIError(400,'Собеседник не найден')
     return 'pair:'+str(min(user['id'],peer))+':'+str(max(user['id'],peer))
+
+def livekit_ready():
+    return all(os.environ.get(key) for key in ('LIVEKIT_URL','LIVEKIT_API_KEY','LIVEKIT_API_SECRET')) and os.environ['LIVEKIT_URL'].startswith('wss://')
+
+def livekit_jwt(video,subject,name='',lifetime=600):
+    now=int(dt.datetime.now(dt.timezone.utc).timestamp())
+    b64=lambda raw:base64.urlsafe_b64encode(raw).rstrip(b'=').decode()
+    header=b64(b'{"alg":"HS256","typ":"JWT"}')
+    payload=b64(json.dumps({'iss':os.environ['LIVEKIT_API_KEY'],'sub':subject,'name':name,
+        'iat':now,'nbf':now-5,'exp':now+lifetime,'video':video},separators=(',',':')).encode())
+    signature=b64(hmac.new(os.environ['LIVEKIT_API_SECRET'].encode(),(header+'.'+payload).encode(),hashlib.sha256).digest())
+    return header+'.'+payload+'.'+signature
+
+def livekit_token(call,user,connection):
+    return livekit_jwt({'roomJoin':True,'room':'forma-call-'+str(call['id']),
+        'canPublish':True,'canSubscribe':True,'canPublishData':False},connection,user['name'])
+
+def livekit_evict(call_id,connection):
+    """Revoke LiveKit Cloud token and disconnect active participant on membership removal."""
+    if not livekit_ready():raise APIError(503,'Нельзя изменить состав во время LiveKit-звонка: ключи LiveKit недоступны')
+    room='forma-call-'+str(call_id)
+    token=livekit_jwt({'roomAdmin':True,'room':room},'forma-server',lifetime=60)
+    data=json.dumps({'room':room,'identity':connection}).encode()
+    url='https://'+os.environ['LIVEKIT_URL'][6:].rstrip('/')+'/twirp/livekit.RoomService/RemoveParticipant'
+    request=urllib.request.Request(url,data,{'Authorization':'Bearer '+token,'Content-Type':'application/json'},method='POST')
+    try:
+        with urllib.request.urlopen(request,timeout=5) as response:response.read(1024)
+    except urllib.error.HTTPError as exc:
+        # If the participant has left, LiveKit Cloud still revokes the token.
+        if exc.code!=404:raise APIError(503,'LiveKit не подтвердил исключение участника; состав не изменён') from exc
+    except (urllib.error.URLError,TimeoutError,OSError) as exc:
+        raise APIError(503,'LiveKit недоступен: участник остаётся в беседе, повторите позже') from exc
 
 def log(db, user_id, action, detail):
     db.execute('INSERT INTO activity(actor_id,action,detail) VALUES(?,?,?)',(user_id,action,detail[:350]))
@@ -412,7 +492,7 @@ class Handler(BaseHTTPRequestHandler):
                                    'last_work_date':details['last_work_date']})
     def serve_static(self, path):
         if path=='/': path='/index.html'
-        if path not in ('/index.html','/styles.css','/main.js','/courier-cat.png','/courier-cat-walk.png',
+        if path not in ('/index.html','/styles.css','/main.js','/calls.js','/livekit-client.umd.min.js','/courier-cat.png','/courier-cat-walk.png',
                             '/chat-flower.png','/chat-branch.png','/mingas-official-logo.webp',
                             '/effect-snake.png','/effect-comet.png','/effect-firefly.png',
                             '/effect-electric.png','/effect-rain.png','/effect-aurora.png'): raise APIError(404,'Страница не найдена')
@@ -527,6 +607,17 @@ class Handler(BaseHTTPRequestHandler):
                 if path=='/api/vacation/import' and method=='POST': return self.vacation_import(db,self.require(db,True),q)
                 if path=='/api/vacation/export' and method=='GET': return self.vacation_export(db,user,q)
                 if path=='/api/bootstrap' and method=='GET': return self.bootstrap(db,user,q)
+                if path=='/api/calls' and method=='GET': return self.call_status(db,user,q)
+                if path=='/api/calls' and method=='POST': return self.call_start(db,user,self.body())
+                if path=='/api/calls/fallback' and method=='POST': return self.call_fallback(db,user,self.body())
+                if path=='/api/calls/cancel' and method=='POST': return self.call_cancel(db,user,self.body())
+                if path=='/api/calls/join' and method=='POST': return self.call_join(db,user,self.body())
+                if path=='/api/calls/heartbeat' and method=='POST': return self.call_heartbeat(db,user,self.body())
+                if path=='/api/calls/leave' and method=='POST': return self.call_leave(db,user,self.body())
+                if path=='/api/calls/signals' and method=='GET': return self.call_signals(db,user,q)
+                if path=='/api/calls/signals' and method=='POST': return self.call_signal_send(db,user,self.body())
+                if path=='/api/chat/groups' and method=='POST': return self.chat_group_create(db,user,self.body())
+                if path.startswith('/api/chat/groups/') and method=='PATCH': return self.chat_group_edit(db,user,path,self.body())
                 if path=='/api/chat' and method=='GET': return self.chat_list(db,user,q)
                 if path=='/api/chat' and method=='POST': return self.chat_send(db,user,self.body())
                 if path=='/api/chat/status' and method=='GET': return self.chat_status(db,user,q)
@@ -738,7 +829,7 @@ class Handler(BaseHTTPRequestHandler):
         db.commit();return self.send_json({'ok':True})
     def deploy_check(self,db,user):
         """Read-only post-deploy diagnostics on the real running process and its D1."""
-        required=('/index.html','/main.js','/styles.css','/effect-snake.png')
+        required=('/index.html','/main.js','/calls.js','/livekit-client.umd.min.js','/styles.css','/effect-snake.png')
         missing=[name for name in required if not (ROOT/'web'/name[1:]).is_file()]
         if not sotipb.SUMMARY_LAYOUT.is_file():missing.append('sotipb-summary-layout.xlsx')
         index=(ROOT/'web'/'index.html').read_text(encoding='utf-8')
@@ -1173,9 +1264,183 @@ class Handler(BaseHTTPRequestHandler):
         if len(new)<8: raise APIError(400,'Новый пароль не менее 8 символов')
         db.execute('UPDATE users SET password_hash=? WHERE id=?',(hashed_password(new),user['id']))
         log(db,user['id'],'password','Пароль изменён'); db.commit(); self.send_json({'ok':True})
+    def call_cleanup(self,db):
+        global CALL_LAST_CLEANUP
+        if time.monotonic()-CALL_LAST_CLEANUP<20:return
+        # Browser disconnects don't deliver leave reliably; expire heartbeats.
+        db.execute("DELETE FROM call_participants WHERE last_seen<datetime('now','-45 seconds')")
+        db.execute("UPDATE call_sessions SET state='ended',updated_at=CURRENT_TIMESTAMP WHERE state='active' AND ("
+                   "(EXISTS(SELECT 1 FROM call_participants p WHERE p.call_id=call_sessions.id)=0 "
+                   "AND created_at<datetime('now','-120 seconds')) OR "
+                   "(updated_at<datetime('now','-120 seconds') AND NOT EXISTS(SELECT 1 FROM call_participants p WHERE p.call_id=call_sessions.id)))")
+        # A started session ends as soon as its final participant leaves (handled in call_leave).
+        db.execute("DELETE FROM call_signals WHERE created_at<datetime('now','-10 minutes')")
+        db.execute("DELETE FROM call_sessions WHERE state='ended' AND updated_at<datetime('now','-1 day') AND NOT EXISTS(SELECT 1 FROM call_participants p WHERE p.call_id=call_sessions.id) AND NOT EXISTS(SELECT 1 FROM call_signals s WHERE s.call_id=call_sessions.id)")
+        db.commit()
+        CALL_LAST_CLEANUP=time.monotonic()
+    def call_status(self,db,user,q):
+        self.call_cleanup(db)
+        calls=[]
+        for row in db.execute("SELECT id,room_key,mode,created_by,created_at FROM call_sessions WHERE state='active' ORDER BY id DESC LIMIT 100"):
+            room=row['room_key']
+            try:
+                if room.startswith('dm:'):
+                    pair=room[3:].split(':')
+                    if len(pair)!=2 or user['id'] not in [int(x) for x in pair]:continue
+                else:call_room_key(db,user,room)
+            except (ValueError,APIError):continue
+            count=db.execute('SELECT COUNT(*) FROM call_participants WHERE call_id=?',(row['id'],)).fetchone()[0]
+            calls.append({'id':row['id'],'room':room,'mode':row['mode'],'created_by':row['created_by'],
+                          'created_at':row['created_at'],'count':count})
+        return self.send_json({'calls':calls,'livekit_available':livekit_ready()})
+    def call_start(self,db,user,data):
+        room=call_room_key(db,user,data.get('room'))
+        self.call_cleanup(db)
+        existing=db.execute("SELECT id,mode FROM call_sessions WHERE room_key=? AND state='active' ORDER BY id DESC LIMIT 1",(room,)).fetchone()
+        if existing:return self.send_json({'id':existing['id'],'mode':existing['mode'],'room':room,'existing':True})
+        mode='livekit' if livekit_ready() else 'p2p'
+        sql="INSERT INTO call_sessions(room_key,mode,created_by) VALUES(?,?,?)"
+        cursor=db.query(sql,(room,mode,user['id'])) if isinstance(db,d1_store.D1Connection) else db.execute(sql,(room,mode,user['id']))
+        db.commit();return self.send_json({'id':cursor.lastrowid,'mode':mode,'room':room,'existing':False})
+    def call_cancel(self,db,user,data):
+        call=self.call_authorized(db,user,data.get('id'))
+        if call['created_by']!=user['id']:raise APIError(403,'Отменить приглашение может только создатель звонка')
+        if db.execute('SELECT 1 FROM call_participants WHERE call_id=? LIMIT 1',(call['id'],)).fetchone():
+            raise APIError(409,'Другие участники уже подключились')
+        db.execute("UPDATE call_sessions SET state='ended',updated_at=CURRENT_TIMESTAMP WHERE id=?",(call['id'],))
+        db.commit();return self.send_json({'ok':True})
+    def call_authorized(self,db,user,call_id):
+        if type(call_id)!=int or call_id<=0:raise APIError(400,'Некорректный звонок')
+        row=db.execute('SELECT * FROM call_sessions WHERE id=? AND state=?',(call_id,'active')).fetchone()
+        if not row:raise APIError(404,'Звонок завершён')
+        room=row['room_key']
+        if room.startswith('dm:'):
+            pair=room[3:].split(':')
+            if len(pair)!=2 or user['id'] not in [int(x) for x in pair]:raise APIError(403,'Нет доступа к звонку')
+        else:call_room_key(db,user,room)
+        return row
+    def call_peer(self,db,user,data):
+        call=self.call_authorized(db,user,data.get('id'))
+        conn=data.get('connection')
+        if not isinstance(conn,str) or not re.fullmatch(r'[0-9a-f]{32}',conn):raise APIError(403,'Сначала подключитесь к звонку')
+        if not db.execute('SELECT 1 FROM call_participants WHERE call_id=? AND user_id=? AND connection_id=?',
+                          (call['id'],user['id'],conn)).fetchone():raise APIError(403,'Участие в звонке не найдено')
+        return call,conn
+    def call_join(self,db,user,data):
+        self.call_cleanup(db)
+        call=self.call_authorized(db,user,data.get('id'))
+        count=db.execute('SELECT COUNT(*) FROM call_participants WHERE call_id=?',(call['id'],)).fetchone()[0]
+        max_count=15 if call['mode']=='livekit' else 4
+        if count>=max_count:raise APIError(409,'В этом режиме звонок заполнен (максимум '+str(max_count)+')')
+        conn=secrets.token_hex(16)
+        db.execute('INSERT INTO call_participants(call_id,user_id,connection_id) VALUES(?,?,?)',(call['id'],user['id'],conn))
+        db.execute('UPDATE call_sessions SET updated_at=CURRENT_TIMESTAMP WHERE id=?',(call['id'],))
+        db.commit()
+        result={'id':call['id'],'room':call['room_key'],'mode':call['mode'],'connection':conn,
+                'max_participants':max_count}
+        if call['mode']=='livekit':result.update({'url':os.environ['LIVEKIT_URL'],'token':livekit_token(call,user,conn)})
+        return self.send_json(result)
+    def call_fallback(self,db,user,data):
+        call,conn=self.call_peer(db,user,data)
+        if call['mode']!='livekit':raise APIError(400,'Звонок уже работает в резервном режиме')
+        count=db.execute('SELECT COUNT(*) FROM call_participants WHERE call_id=?',(call['id'],)).fetchone()[0]
+        if count!=1:raise APIError(409,'В LiveKit уже подключились другие участники; переход возможен только до начала встречи')
+        db.execute("UPDATE call_sessions SET mode='p2p',updated_at=CURRENT_TIMESTAMP WHERE id=?",(call['id'],))
+        db.commit();return self.send_json({'ok':True,'mode':'p2p','max_participants':4})
+    def call_heartbeat(self,db,user,data):
+        call,conn=self.call_peer(db,user,data)
+        db.execute('UPDATE call_participants SET last_seen=CURRENT_TIMESTAMP WHERE call_id=? AND connection_id=?',(call['id'],conn))
+        db.execute('UPDATE call_sessions SET updated_at=CURRENT_TIMESTAMP WHERE id=?',(call['id'],))
+        db.commit()
+        peers=json_rows(db.execute('''SELECT p.connection_id connection,p.user_id,u.name
+            FROM call_participants p JOIN users u ON u.id=p.user_id WHERE p.call_id=? AND p.connection_id<>?
+            ORDER BY p.connection_id''',(call['id'],conn)).fetchall())
+        return self.send_json({'ok':True,'peers':peers})
+    def call_leave(self,db,user,data):
+        call,conn=self.call_peer(db,user,data)
+        db.execute('DELETE FROM call_participants WHERE call_id=? AND connection_id=?',(call['id'],conn))
+        db.execute('DELETE FROM call_signals WHERE call_id=? AND (target_conn=? OR sender_conn=?)',(call['id'],conn,conn))
+        db.commit()
+        if not db.execute('SELECT 1 FROM call_participants WHERE call_id=? LIMIT 1',(call['id'],)).fetchone():
+            db.execute("UPDATE call_sessions SET state='ended',updated_at=CURRENT_TIMESTAMP WHERE id=?",(call['id'],))
+            db.execute('DELETE FROM call_signals WHERE call_id=?',(call['id'],))
+            db.commit()
+        return self.send_json({'ok':True})
+    def call_signals(self,db,user,q):
+        try:call_id=int(q.get('id',[''])[0]);after=int(q.get('after',['0'])[0])
+        except (TypeError,ValueError):raise APIError(400,'Некорректная граница сигналов')
+        call,conn=self.call_peer(db,user,{'id':call_id,'connection':q.get('connection',[''])[0]})
+        if call['mode']!='p2p':raise APIError(400,'Сигналы доступны только для P2P')
+        rows=json_rows(db.execute('SELECT id,sender_conn sender,signal_json FROM call_signals WHERE call_id=? AND target_conn=? AND id>? ORDER BY id LIMIT 100',(call_id,conn,max(0,after))).fetchall())
+        for row in rows:row['signal']=json.loads(row.pop('signal_json'))
+        return self.send_json({'signals':rows})
+    def call_signal_send(self,db,user,data):
+        call,conn=self.call_peer(db,user,data)
+        if call['mode']!='p2p':raise APIError(400,'Недопустимый режим сигнализации')
+        target=data.get('target');signal=data.get('signal')
+        if not isinstance(target,str) or not re.fullmatch(r'[0-9a-f]{32}',target) or target==conn or not isinstance(signal,dict) or signal.get('type') not in ('offer','answer','candidate'):
+            raise APIError(400,'Некорректный сигнал')
+        raw=json.dumps(signal,separators=(',',':'))
+        if len(raw)>25000 or not db.execute('SELECT 1 FROM call_participants WHERE call_id=? AND connection_id=?',(call['id'],target)).fetchone():
+            raise APIError(400,'Участник не найден или сигнал слишком велик')
+        db.execute('INSERT INTO call_signals(call_id,sender_conn,target_conn,signal_json) VALUES(?,?,?,?)',(call['id'],conn,target,raw))
+        db.commit();return self.send_json({'ok':True})
+    def chat_group_create(self,db,user,data):
+        title=data.get('title');members=data.get('members')
+        if not isinstance(title,str) or not 2<=len(title.strip())<=80 or any(ord(c)<32 for c in title):
+            raise APIError(400,'Название беседы: от 2 до 80 символов')
+        if not isinstance(members,list) or any(type(x)!=int for x in members) or len(members)!=len(set(members)) or not 3<=len(members)<=49 or any(x==user['id'] or x<=0 for x in members):
+            raise APIError(400,'Выберите минимум трёх других сотрудников (всего от четырёх участников)')
+        existing=db.execute('SELECT COUNT(*) FROM users WHERE active=1 AND id IN ('+','.join('?' for _ in members)+')',members).fetchone()[0]
+        if existing!=len(members):raise APIError(400,'Один из участников не найден или отключён')
+        insert='INSERT INTO group_chats(title,created_by) VALUES(?,?)'
+        cursor=db.query(insert,(title.strip(),user['id'])) if isinstance(db,d1_store.D1Connection) else db.execute(insert,(title.strip(),user['id']))
+        gid=cursor.lastrowid
+        for uid in [user['id'],*members]:db.execute('INSERT INTO group_members(group_id,user_id) VALUES(?,?)',(gid,uid))
+        log(db,user['id'],'group_created',f'Создана беседа «{title.strip()}» ({len(members)+1} участников)')
+        db.commit();return self.send_json({'ok':True,'id':gid,'room':'group:'+str(gid)})
+    def chat_group_edit(self,db,user,path,data):
+        try:gid=int(path.rsplit('/',1)[1])
+        except ValueError:raise APIError(400,'Некорректная беседа')
+        room='group:'+str(gid);group=checked_group(db,user,room)
+        if group['created_by']!=user['id']:raise APIError(403,'Состав меняет создатель беседы')
+        members=data.get('members');title=data.get('title',group['title'])
+        if not isinstance(title,str) or not 2<=len(title.strip())<=80 or any(ord(c)<32 for c in title) or not isinstance(members,list) or any(type(x)!=int for x in members) or len(members)!=len(set(members)) or not 3<=len(members)<=49 or any(x<=0 or x==user['id'] for x in members):
+            raise APIError(400,'Укажите название и минимум трёх других участников')
+        if db.execute('SELECT COUNT(*) FROM users WHERE active=1 AND id IN ('+','.join('?' for _ in members)+')',members).fetchone()[0]!=len(members):
+            raise APIError(400,'Участник отключён или не найден')
+        old={r[0] for r in db.execute('SELECT user_id FROM group_members WHERE group_id=?',(gid,))}
+        deleted=old-set(members)-{user['id']}
+        if deleted:
+            calls=db.execute("SELECT id FROM call_sessions WHERE room_key=? AND mode='livekit' AND state='active'",(room,)).fetchall()
+            for call in calls:
+                for member_id in deleted:
+                    connections=db.execute('SELECT connection_id FROM call_participants WHERE call_id=? AND user_id=?',
+                                           (call['id'],member_id)).fetchall()
+                    for connection in connections:livekit_evict(call['id'],connection['connection_id'])
+        for uid in deleted:
+            # Remove the revoked member's signalling presence immediately.
+            # Other honest P2P clients close that peer on the next heartbeat.
+            affected=db.execute("SELECT call_id,connection_id FROM call_participants WHERE user_id=? AND call_id IN (SELECT id FROM call_sessions WHERE room_key=? AND state='active')",(uid,room)).fetchall()
+            for participant in affected:
+                db.execute('DELETE FROM call_signals WHERE call_id=? AND (sender_conn=? OR target_conn=?)',
+                           (participant['call_id'],participant['connection_id'],participant['connection_id']))
+                db.execute('DELETE FROM call_participants WHERE call_id=? AND connection_id=?',
+                           (participant['call_id'],participant['connection_id']))
+                db.execute("UPDATE call_sessions SET state='ended',updated_at=CURRENT_TIMESTAMP WHERE id=? AND NOT EXISTS(SELECT 1 FROM call_participants WHERE call_id=?)",
+                           (participant['call_id'],participant['call_id']))
+            db.execute('DELETE FROM group_members WHERE group_id=? AND user_id=?',(gid,uid))
+            db.execute('DELETE FROM chat_pins WHERE user_id=? AND room_key=?',(uid,room))
+            db.execute('DELETE FROM chat_reads WHERE user_id=? AND room_key=?',(uid,room))
+        for uid in set(members)-old:db.execute('INSERT INTO group_members(group_id,user_id) VALUES(?,?)',(gid,uid))
+        db.execute('UPDATE group_chats SET title=? WHERE id=?',(title.strip(),gid))
+        log(db,user['id'],'group_updated',f'Обновлён состав беседы #{gid}')
+        db.commit();return self.send_json({'ok':True,'room':room})
     def chat_list(self,db,user,q):
         """Only group messages or direct messages involving this user; last 100 + polling."""
         room=q.get('room',['general'])[0]
+        if isinstance(room,str) and room.startswith('group:'):
+            return self.chat_group_list(db,user,room,q)
         if room=='general':
             where='m.recipient_id IS NULL';params=[]
         else:
@@ -1234,6 +1499,46 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError,TypeError,APIError):theme={}
         self.send_json({'messages':messages,'users':people,'has_more':has_more,
                         'theme':theme,'theme_updated_at':theme_row['updated_at'] if theme_row else None})
+    def chat_group_list(self,db,user,room,q):
+        group=checked_group(db,user,room)
+        after=q.get('after',[None])[0];before=q.get('before',[None])[0]
+        if after is not None and before is not None:raise APIError(400,'Выберите одну границу истории')
+        bound=after if after is not None else before
+        if bound is not None:
+            try:num=int(bound)
+            except (TypeError,ValueError):raise APIError(400,'Некорректный номер сообщения')
+            if num<0 or str(num)!=bound:raise APIError(400,'Некорректный номер сообщения')
+        params=[group['id']]
+        if after is not None:
+            clause=' AND m.id>?';params.append(num);order='ASC'
+        else:
+            clause=' AND m.id<?' if before is not None else ''
+            if before is not None:params.append(num)
+            order='DESC'
+        rows=db.execute('''SELECT m.id,m.sender_id,NULL recipient_id,m.body,m.created_at,m.style_json,
+               u.name sender_name,COALESCE(a.revision,0) avatar_revision,COALESCE(a.image_url,'') avatar_url,
+               CASE WHEN a.image_b64<>'' THEN 1 ELSE 0 END avatar_stored
+               FROM group_messages m JOIN users u ON u.id=m.sender_id
+               LEFT JOIN user_avatars a ON a.user_id=u.id WHERE m.group_id=?'''+clause+
+               ' ORDER BY m.id '+order+' LIMIT 100',params).fetchall()
+        messages=json_rows(rows)
+        if after is None:messages.reverse()
+        has_more=(bool(db.execute('SELECT 1 FROM group_messages WHERE group_id=? AND id<? LIMIT 1',
+                       (group['id'],messages[0]['id'])).fetchone()) if messages else False) if after is None else None
+        for m in messages:
+            try:m['style']=valid_chat_style(json.loads(m.pop('style_json') or '{}'))
+            except (ValueError,TypeError,APIError):m['style']={}
+        people=json_rows(db.execute('''SELECT u.id,u.name,u.role,COALESCE(a.revision,0) avatar_revision,
+             COALESCE(a.image_url,'') avatar_url,CASE WHEN a.image_b64<>'' THEN 1 ELSE 0 END avatar_stored
+             FROM users u LEFT JOIN user_avatars a ON a.user_id=u.id WHERE u.active=1 AND u.id<>? ORDER BY u.name''',
+             (user['id'],)).fetchall())
+        members=[r[0] for r in db.execute('SELECT user_id FROM group_members WHERE group_id=? ORDER BY user_id',(group['id'],))]
+        theme_row=db.execute('SELECT theme_json,updated_at FROM chat_themes WHERE room_key=?',(room,)).fetchone()
+        try:theme=valid_chat_style(json.loads(theme_row['theme_json'])) if theme_row else {}
+        except (ValueError,TypeError,APIError):theme={}
+        return self.send_json({'messages':messages,'users':people,'has_more':has_more,'group':{
+                  'id':group['id'],'title':group['title'],'created_by':group['created_by'],'members':members},
+                  'theme':theme,'theme_updated_at':theme_row['updated_at'] if theme_row else None})
     def chat_theme_save(self,db,user,data):
         key=chat_theme_key(db,user,data.get('room'))
         theme=valid_chat_style(data.get('style'))
@@ -1250,6 +1555,18 @@ class Handler(BaseHTTPRequestHandler):
         db.commit()
         self.send_json({'ok':True,'theme':theme})
     def chat_send(self,db,user,data):
+        if data.get('group_id') is not None:
+            gid=data.get('group_id')
+            if type(gid)!=int or gid<=0:raise APIError(400,'Некорректная беседа')
+            checked_group(db,user,'group:'+str(gid))
+            text=data.get('body')
+            if not isinstance(text,str) or not text.strip() or len(text.strip())>2000 or '\x00' in text:
+                raise APIError(400,'Сообщение: от 1 до 2000 символов')
+            style=valid_chat_style(data.get('style',{}))
+            sql='INSERT INTO group_messages(group_id,sender_id,body,style_json) VALUES(?,?,?,?)'
+            args=(gid,user['id'],text.strip(),json.dumps(style,separators=(',',':')))
+            cursor=db.query(sql,args) if isinstance(db,d1_store.D1Connection) else db.execute(sql,args)
+            db.commit();return self.send_json({'ok':True,'id':cursor.lastrowid})
         recipient=data.get('recipient_id')
         if recipient is not None:
             if type(recipient) is not int or recipient<=0 or recipient==user['id']:
@@ -1269,7 +1586,9 @@ class Handler(BaseHTTPRequestHandler):
     def chat_pin(self,db,user,data):
         room=data.get('room');pin=data.get('pinned')
         if type(pin)!=bool:raise APIError(400,'Некорректная отметка закрепления')
-        if room=='general':key='general'
+        if isinstance(room,str) and room.startswith('group:'):
+            key='group:'+str(checked_group(db,user,room)['id'])
+        elif room=='general':key='general'
         else:
             try:peer=int(room)
             except (TypeError,ValueError):raise APIError(400,'Некорректный чат')
@@ -1314,15 +1633,40 @@ class Handler(BaseHTTPRequestHandler):
                    WHERE m.recipient_id IS NULL OR m.sender_id=? OR m.recipient_id=?
                    GROUP BY room_key""",(uid,uid,uid)).fetchall()
         pinned=db.execute('SELECT room_key FROM chat_pins WHERE user_id=?',(uid,)).fetchall()
+        groups=json_rows(db.execute('''SELECT g.id,g.title,g.created_by,
+             (SELECT COUNT(*) FROM group_members members WHERE members.group_id=g.id) member_count,
+             (SELECT COALESCE(MAX(id),0) FROM group_messages m WHERE m.group_id=g.id) last_id,
+             (SELECT COUNT(*) FROM group_messages m LEFT JOIN chat_reads r
+                ON r.user_id=? AND r.room_key=('group:'||g.id)
+                WHERE m.group_id=g.id AND m.sender_id<>? AND m.id>COALESCE(r.last_read_id,0)) unread
+             FROM group_chats g JOIN group_members gm ON gm.group_id=g.id
+             WHERE gm.user_id=? ORDER BY g.id DESC''',(uid,uid,uid)).fetchall())
+        group_latest=db.execute('''SELECT COALESCE(MAX(m.id),0) FROM group_messages m
+            JOIN group_members gm ON gm.group_id=m.group_id AND gm.user_id=?''',(uid,)).fetchone()[0]
+        group_after=q.get('group_after',[None])[0]
+        group_notices=[]
+        if group_after is not None:
+            try:group_cursor=int(group_after)
+            except (TypeError,ValueError):raise APIError(400,'Некорректный номер группового сообщения')
+            if group_cursor<0 or str(group_cursor)!=group_after:raise APIError(400,'Некорректный номер группового сообщения')
+            group_notices=json_rows(db.execute('''SELECT m.id,m.group_id,m.sender_id,u.name sender_name
+                FROM group_messages m JOIN group_members gm ON gm.group_id=m.group_id AND gm.user_id=?
+                JOIN users u ON u.id=m.sender_id WHERE m.id>? AND m.sender_id<>?
+                ORDER BY m.id LIMIT 50''',(uid,group_cursor,uid)).fetchall())
+        next_group_cursor=group_notices[-1]['id'] if len(group_notices)==50 else group_latest
         # If there are more than 50 notices, the next poll continues instead of skipping them.
         next_cursor=notices[-1]['id'] if len(notices)==50 else latest
         self.send_json({'direct':{str(x['peer_id']):x['unread'] for x in direct},
                         'general':general,'notices':notices,'cursor':next_cursor,
                         'rooms':{r['room_key']:r['last_id'] for r in rooms},
-                        'pinned':[r['room_key'] for r in pinned]})
+                        'pinned':[r['room_key'] for r in pinned],
+                        'groups':groups,'group_notices':group_notices,'group_cursor':next_group_cursor})
     def chat_read(self,db,user,data):
         room=data.get('room')
-        if room=='general':
+        if isinstance(room,str) and room.startswith('group:'):
+            group=checked_group(db,user,room);key='group:'+str(group['id'])
+            latest=db.execute('SELECT COALESCE(MAX(id),0) FROM group_messages WHERE group_id=?',(group['id'],)).fetchone()[0]
+        elif room=='general':
             key='general';latest=db.execute('''SELECT COALESCE(MAX(id),0) FROM chat_messages
                 WHERE recipient_id IS NULL''').fetchone()[0]
         else:
