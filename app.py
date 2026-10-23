@@ -37,7 +37,7 @@ DB = ROOT / 'worktrack.sqlite3'
 BACKUP_DIR = ROOT / 'backups'
 DB_LOCK = threading.RLock()
 CALL_LAST_CLEANUP = 0.0
-BUILD_ID = '20261023-51'  # Public /health marker to verify which build Render actually serves.
+BUILD_ID = '20261023-52'  # Public /health marker to verify which build Render actually serves.
 # New effects reuse the existing CHECK(kind IN ('people','speech')) table safely.
 # This keeps old production D1/SQLite backups and schema compatible.
 PRANK_EFFECT_PREFIX = '\x1eFORMA_EFFECT_V1:'

@@ -80,19 +80,6 @@ def _type(row,group,warnings):
             return ''
     return types[0] if len(types)==1 or len(set(types))==1 else '\n'.join(f'{t} ({"было" if i==0 else "стало"})' for i,t in enumerate(types))
 
-def _change(text):
-    parts=_split(text)
-    if len(parts)==2:return f'{parts[0]} (было)\n{parts[1]} (стало)'
-    return parts[0]
-
-def _diameter(row):
-    if row[17]:return row[17]
-    parts=_split(row[4])
-    lay=_split(row[7])
-    def clean(x):return re.sub(r'(?i)\s*(пэ|пе|ст|сталь|полиэтилен|стальной)\s*$', '', x).strip()
-    out=[(clean(p)+' '+lay[min(i,len(lay)-1)]).strip() for i,p in enumerate(parts)]
-    return '\n'.join(x+(' (было)' if i==0 else ' (стало)') for i,x in enumerate(out)) if len(out)>1 else out[0]
-
 def _year(text):return text[:-2] if text.endswith('.0') and text[:-2].isdigit() else text
 
 def _safe_write(cell,value):
@@ -111,7 +98,7 @@ def _source_style(sheet):
         cell.fill=PatternFill('solid',fgColor='1B544D')
         cell.alignment=Alignment(wrap_text=True,vertical='center')
         if c>BASE:
-            cell.comment=Comment('Необязательное уточнение для свода. Если исходный «лист 1» уже содержит правильное значение, оставьте пустым.','Forma')
+            cell.comment=Comment('Необязательное уточнение. Q/R используются только если соответственно F/E в этой строке пусты; P уточняет тип ПОО.','Forma')
     sheet.row_dimensions[1].height=56
     sheet.auto_filter.ref='A1:R1'
     sheet.print_options.horizontalCentered=True
@@ -120,7 +107,7 @@ def _source_style(sheet):
 
 def template():
     book=Workbook();sheet=book.active;sheet.title='лист 1';_source_style(sheet)
-    hints={2:'Например: 5-65/2',4:'Адрес ПОО',5:'Например: 159ст или 600/630',6:'Например: 3.3/0.2',7:'нд, сд, вд1 или В2',8:'подземный или надземный'}
+    hints={2:'Архивный номер, если C пуст. Например: 5-65/2',3:'Новый архивный номер: при наличии он имеет приоритет над B',4:'Адрес ПОО',5:'Дословно переносится в D свода. Например: 159ст или 600/630',6:'Дословно переносится в C свода. Например: 3.3/0.2',7:'нд, сд, вд1 или В2',8:'подземный или надземный'}
     for col,example in hints.items():sheet.cell(1,col).comment=Comment('Вводите данные начиная со строки 2. '+example+'; пустые ячейки допускаются, но в своде не будут заполняться догадками.','Forma')
     stream=io.BytesIO();book.save(stream);book.close();return stream.getvalue()
 
@@ -150,7 +137,7 @@ def convert(blob):
             if any(values[BASE:]) and extra_headers!=HEADERS[BASE:]:
                 raise ConversionError(f'Строка {number}: значения в P–R допустимы только под заголовками болванки СОТИПБ')
             if not values[3]:warnings.append(f'Строка {number}: адрес пуст')
-            if not values[4]:warnings.append(f'Строка {number}: диаметр пуст')
+            if not values[4] and not values[17]:warnings.append(f'Строка {number}: диаметр пуст')
             if not values[5] and not values[16]:warnings.append(f'Строка {number}: длина отсутствует и не будет придумана')
             if not values[6]:warnings.append(f'Строка {number}: давление пусто')
             if not values[7]:warnings.append(f'Строка {number}: вид прокладки пуст')
@@ -171,7 +158,9 @@ def convert(blob):
         body_styles=[copy(summary.cell(5,c)._style) for c in range(1,11)]
         groups=[]
         for row in rows:
-            key=tuple(row[i].casefold() for i in (1,2,3))
+            # C (new archive number) wins; B is used only when C is empty.
+            # Group by the same effective number that appears in the summary.
+            key=((row[2] or row[1]).casefold(),row[3].casefold())
             if groups and groups[-1][0]==key:groups[-1][1].append(row)
             else:groups.append((key,[row]))
         line=5
@@ -180,13 +169,15 @@ def convert(blob):
             for row in group:
                 dtype=_type(row,group,warnings)
                 address=row[3]
-                numbers=[]
-                if row[1]:numbers.append('арх. № '+row[1])
-                if row[2]:numbers.append('нов. арх. № '+row[2])
-                if numbers:address+='\n('+ '; '.join(numbers)+')'
-                length=row[16] or (row.raw[5] if isinstance(row.raw[5],(int,float)) and not isinstance(row.raw[5],bool) else _change(row[5]))
+                number=row[2] or row[1]
+                if number:address+='\n('+('нов. арх. № ' if row[2] else 'арх. № ')+number+')'
+                # E and F are copied verbatim, including material, slash-separated
+                # values, spaces and numeric types. Q/R remain fallback values only
+                # when the corresponding original cell is empty.
+                length=row.raw[5] if row[5] else (row.raw[16] if row[16] else '')
+                diameter=row.raw[4] if row[4] else (row.raw[17] if row[17] else '')
                 year=row.raw[10] if isinstance(row.raw[10],(int,float)) and not isinstance(row.raw[10],bool) else _year(row[10])
-                output=[dtype,address,length,_diameter(row),row[9],year,row[11],'','','']
+                output=[dtype,address,length,diameter,row[9],year,row[11],'','','']
                 for col,text in enumerate(output,1):
                     cell=summary.cell(line,col);_safe_write(cell,text)
                     # The actual sample's unfilled, black medium-border cells:
