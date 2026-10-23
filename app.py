@@ -37,11 +37,13 @@ DB = ROOT / 'worktrack.sqlite3'
 BACKUP_DIR = ROOT / 'backups'
 DB_LOCK = threading.RLock()
 CALL_LAST_CLEANUP = 0.0
-BUILD_ID = '20261022-48'  # Public /health marker to verify which build Render actually serves.
+BUILD_ID = '20261023-51'  # Public /health marker to verify which build Render actually serves.
 # New effects reuse the existing CHECK(kind IN ('people','speech')) table safely.
 # This keeps old production D1/SQLite backups and schema compatible.
 PRANK_EFFECT_PREFIX = '\x1eFORMA_EFFECT_V1:'
-PRANK_NEW_KINDS = ('cat','achievement','parade')
+PRANK_NEW_KINDS = ('cat','achievement','parade','plane','stamp','duck','stickers','bonus')
+# Background tabs may be throttled to ~1-minute timers; 15 seconds was too short.
+PRESENCE_WINDOW = dt.timedelta(seconds=120)
 TZ = ZoneInfo('Europe/Minsk')
 TODAY = lambda: dt.datetime.now(TZ).date()
 MONTH_PATTERN = re.compile(r'^\d{4}-(0[1-9]|1[0-2])$')
@@ -599,8 +601,8 @@ class Handler(BaseHTTPRequestHandler):
                 if path=='/api/backup/restore' and method=='POST': return self.backup_restore(db,self.require(db,True),q)
                 if path=='/api/prank/poll' and method=='GET': return self.prank_poll(db,user,q)
                 if path=='/api/presence' and method=='GET': return self.presence(db,user)
-                if path=='/api/prank/online' and method=='GET': return self.prank_online(db,self.require(db,True))
-                if path=='/api/prank/send' and method=='POST': return self.prank_send(db,self.require(db,True),self.body())
+                if path=='/api/prank/online' and method=='GET': return self.prank_online(db,user)
+                if path=='/api/prank/send' and method=='POST': return self.prank_send(db,user,self.body())
                 if path=='/api/vacation' and method=='GET': return self.vacation_list(db,user,q)
                 if path=='/api/vacation/save' and method=='POST': return self.vacation_save(db,self.require(db,True),self.body())
                 if path=='/api/vacation/help' and method=='POST': return self.vacation_help(db,self.require(db,True),self.body())
@@ -961,16 +963,20 @@ class Handler(BaseHTTPRequestHandler):
           LEFT JOIN user_avatars a ON a.user_id=u.id
           WHERE u.active=1 AND p.last_seen>=? AND s.expires_at>?
           ORDER BY CASE WHEN u.role='admin' THEN 0 ELSE 1 END,u.name''',
-          ((now-dt.timedelta(seconds=15)).isoformat(),now.isoformat())).fetchall()
+          ((now-PRESENCE_WINDOW).isoformat(),now.isoformat())).fetchall()
         return self.send_json({'users':json_rows(rows)})
     def prank_online(self,db,user):
+        """Directory of active targets for logged-in users; includes online status."""
         now=dt.datetime.now(dt.timezone.utc)
-        cutoff=(now-dt.timedelta(seconds=15)).isoformat()
-        rows=db.execute('''SELECT DISTINCT p.user_id FROM prank_presence p
-          JOIN users u ON u.id=p.user_id JOIN sessions s ON s.token_hash=p.session_hash
-          WHERE p.last_seen>=? AND s.expires_at>? AND u.active=1 AND u.is_staff=1 ''',
-          (cutoff,now.isoformat())).fetchall()
-        return self.send_json({'user_ids':[row['user_id'] for row in rows]})
+        cutoff=(now-PRESENCE_WINDOW).isoformat()
+        rows=json_rows(db.execute('''SELECT u.id,u.name,u.role,
+            CASE WHEN EXISTS(SELECT 1 FROM prank_presence p
+               JOIN sessions s ON s.token_hash=p.session_hash
+               WHERE p.user_id=u.id AND p.last_seen>=? AND s.expires_at>?) THEN 1 ELSE 0 END online
+          FROM users u WHERE u.active=1 ORDER BY u.name,u.id''',
+          (cutoff,now.isoformat())).fetchall())
+        return self.send_json({'user_ids':[r['id'] for r in rows if r['online']],
+                               'users':[{'id':r['id'],'name':r['name'],'role':r['role']} for r in rows]})
     def prank_send(self,db,user,data):
         try: target=int(data.get('user_id'))
         except (TypeError,ValueError): raise APIError(400,'Выберите сотрудника')
@@ -983,21 +989,28 @@ class Handler(BaseHTTPRequestHandler):
         if kind=='speech' and (not body or len(body)>400): raise APIError(400,'Введите текст от 1 до 400 символов')
         if kind=='cat' and (not body or len(body)>140): raise APIError(400,'Сообщение кота: от 1 до 140 символов')
         if kind=='achievement' and (not body or len(body)>80): raise APIError(400,'Название достижения: от 1 до 80 символов')
+        if kind=='plane' and (not body or len(body)>140): raise APIError(400,'Послание самолётика: от 1 до 140 символов')
+        if kind=='stamp' and (not body or len(body)>65): raise APIError(400,'Текст печати: от 1 до 65 символов')
+        if kind=='duck' and (not body or len(body)>100): raise APIError(400,'Реплика утки: от 1 до 100 символов')
+        if kind=='bonus' and (not body or len(body)>120): raise APIError(400,'Секретный бонус: от 1 до 120 символов')
+        if kind=='stickers' and body not in ('stars','hearts'): raise APIError(400,'Выберите звёзды или сердечки')
         if kind in ('people','parade'): body=''
         stored_kind=kind if kind in ('people','speech') else 'speech'
         stored_body=PRANK_EFFECT_PREFIX+json.dumps({'kind':kind,'text':body},ensure_ascii=False) if kind in PRANK_NEW_KINDS else body
-        recipient=db.execute('SELECT name FROM users WHERE id=? AND is_staff=1 AND active=1',(target,)).fetchone()
-        if not recipient: raise APIError(404,'Сотрудник не найден')
+        recipient=db.execute('SELECT name FROM users WHERE id=? AND active=1',(target,)).fetchone()
+        if not recipient: raise APIError(404,'Пользователь не найден')
         now=dt.datetime.now(dt.timezone.utc)
         present=db.execute('''SELECT 1 FROM prank_presence p JOIN sessions s ON s.token_hash=p.session_hash
           WHERE p.user_id=? AND p.last_seen>=? AND s.expires_at>? LIMIT 1''',
-          (target,(now-dt.timedelta(seconds=15)).isoformat(),now.isoformat())).fetchone()
+          (target,(now-PRESENCE_WINDOW).isoformat(),now.isoformat())).fetchone()
         if not present: raise APIError(409,'Пользователь сейчас не в сети. Попросите его открыть сайт.')
         db.execute('INSERT INTO prank_events(target_id,kind,body,created_at) VALUES(?,?,?,?)',
                    (target,stored_kind,stored_body,now.isoformat()))
         db.execute('DELETE FROM prank_events WHERE created_at<?',((now-dt.timedelta(days=1)).isoformat(),))
         label={'people':'Человечки','speech':'Голосовое сообщение','cat':'Кот-курьер',
-               'achievement':'Достижение','parade':'Мини-парад'}[kind]
+               'achievement':'Достижение','parade':'Мини-парад','plane':'Бумажный самолётик',
+               'stamp':'Печать «Одобрено!»','duck':'Важная утка','stickers':'Дождь из стикеров',
+               'bonus':'Секретный бонус'}[kind]
         log(db,user['id'],'prank',f'{label} → {recipient["name"]}')
         db.commit()
         return self.send_json({'ok':True,'name':recipient['name']})

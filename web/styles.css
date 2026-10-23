@@ -231,8 +231,42 @@
 @keyframes parade-step{from{transform:translateY(1px) rotate(-5deg)}to{transform:translateY(-9px) rotate(5deg)}}
 @keyframes parade-cross{from{transform:translate3d(-550px,0,0)}to{transform:translate3d(calc(100vw + 20px),0,0)}}
 @media(max-width:600px){.prank-cat-bob .prank-cat-sprite{width:190px;height:133px}.prank-cat-bubble{bottom:137px;width:205px}.prank-cat-runner{height:240px}.prank-achievement-toast{top:68px}.prank-parade-track{width:350px}}
-/* Приколы запускаются только по явному действию администратора. Даже если в Windows
-   отключены обычные эффекты интерфейса, в Edge кот, конфетти и парад двигаются. */
+/* Пять дополнительных коротких эффектов для всех вошедших пользователей. */
+.prank-card select{box-sizing:border-box;width:100%;border:1px solid #dbe7e8;border-radius:10px;padding:12px;color:#294555;font:inherit;font-size:16px;background:#fff;margin-bottom:16px}
+.prank-card select:focus{outline:2px solid #61cbb1;outline-offset:2px}
+.plane-art{background:linear-gradient(125deg,#e5f5ff,#e3f7f2);color:#157b8f;font-size:60px}.plane-art span:first-child{font-size:40px;transform:rotate(-15deg)}.plane-art span:last-child{transform:rotate(-22deg)}
+.stamp-art{background:linear-gradient(120deg,#fff2e9,#fff7f2)}.stamp-art span{font-size:20px;letter-spacing:2px;font-weight:900;color:#bd5752;border:5px double #bd5752;border-radius:14px;padding:13px 20px;transform:rotate(-12deg)}
+.duck-art{background:linear-gradient(120deg,#fff8d8,#d9f5eb)}.duck-art span:first-child{font-size:64px}.duck-art span:last-child{font-size:18px;color:#4a6f65;font-weight:800;background:white;border-radius:20px;padding:7px 12px}
+.sticker-art{background:linear-gradient(120deg,#f9edff,#eaf7ff);font-size:49px}.sticker-art span:nth-child(2){transform:translateY(-19px) rotate(13deg)}
+.bonus-art{background:linear-gradient(120deg,#fdf1ce,#e7f8ec);font-size:64px}.bonus-art span:last-child{font-size:37px;color:#946caa;font-weight:900;transform:rotate(12deg)}
+.prank-plane-layer,.prank-stamp-layer,.prank-duck-layer,.prank-stickers-layer,.prank-bonus-layer{pointer-events:none;overflow:hidden}
+.prank-plane-runner{position:absolute;left:0;bottom:18px;width:min(300px,calc(100vw - 20px));animation:prank-plane-cross 8s linear both;will-change:transform}
+.prank-plane-paper{color:#268698;text-align:center;font-size:78px;line-height:1;transform:rotate(-22deg);filter:drop-shadow(0 9px 8px #20545d3d);animation:prank-plane-bob .6s ease-in-out infinite alternate}
+.prank-plane-note{padding:12px 16px;background:#fff;border:1px solid #b5deda;border-radius:16px;box-shadow:0 12px 28px #2144542e;max-width:100%;box-sizing:border-box}
+.prank-plane-note small,.prank-duck-note small{display:block;color:#217d78;font-weight:850;font-size:12px;letter-spacing:.7px;margin-bottom:5px}
+.prank-plane-note strong,.prank-duck-note strong{display:block;color:#204849;line-height:1.35;font-size:17px;white-space:pre-wrap;overflow-wrap:anywhere}
+@keyframes prank-plane-cross{0%{transform:translateX(-320px)}20%,78%{transform:translateX(calc(100vw - min(320px, 100vw)))}100%{transform:translateX(calc(100vw + 30px))}}
+@keyframes prank-plane-bob{to{transform:translateY(-13px) rotate(-17deg)}}
+.prank-stamp-mark{position:absolute;right:20px;top:80px;width:min(310px,calc(100vw - 40px));min-height:150px;box-sizing:border-box;background:#fffcf5ee;box-shadow:0 16px 36px #4f30282b;border:5px double #bd5651;border-radius:24px;color:#a93632;text-align:center;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:3px;padding:12px 19px;transform:rotate(-8deg);animation:prank-stamp-pop 6.3s both}
+.prank-stamp-icon{font-size:28px;border:2px solid #bd5651;border-radius:50%;line-height:1;padding:1px 8px}
+.prank-stamp-mark small{font-size:12px;font-weight:850;letter-spacing:1.2px}.prank-stamp-mark strong{font-size:20px;line-height:1.22;white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%}
+@keyframes prank-stamp-pop{0%{opacity:0;transform:rotate(-8deg) scale(1.65)}12%,85%{opacity:1;transform:rotate(-8deg) scale(1)}100%{opacity:0;transform:rotate(-8deg) scale(.95)}}
+.prank-duck-runner{position:absolute;bottom:10px;left:0;display:flex;align-items:end;gap:5px;width:min(310px,calc(100vw - 12px));animation:prank-duck-cross 8.8s linear both}
+.prank-duck-emoji{font-size:66px;line-height:1;filter:drop-shadow(0 7px 6px #2946422d);animation:prank-duck-waddle .35s ease-in-out infinite alternate}
+.prank-duck-note{background:#fffef4;border:1px solid #e5dba4;border-radius:16px 16px 4px 16px;box-shadow:0 9px 30px #364b2b30;padding:12px;min-width:0;flex:1;margin-bottom:46px}
+.prank-duck-note button{pointer-events:auto;margin-top:8px;background:#e3f5e9;border:1px solid #abd8ba;border-radius:9px;padding:4px 10px;font:inherit;color:#205644;cursor:pointer}
+@keyframes prank-duck-cross{0%{transform:translateX(-330px)}20%,78%{transform:translateX(calc(100vw - min(320px, 100vw)))}100%{transform:translateX(calc(100vw + 20px))}}
+@keyframes prank-duck-waddle{to{transform:rotate(-9deg) translateY(-7px)}}
+.prank-sticker{position:absolute;left:var(--sticker-x);top:-40px;display:block;font-size:clamp(20px,3vw,31px);line-height:1;animation:prank-sticker-fall var(--sticker-duration) var(--sticker-delay) ease-in both;filter:drop-shadow(0 3px 5px #39576428)}
+@keyframes prank-sticker-fall{0%{opacity:0;transform:translateY(-15px) rotate(0)}12%,80%{opacity:1}100%{opacity:0;transform:translateY(calc(100vh + 65px)) rotate(var(--sticker-turn))}}
+.prank-bonus-card{pointer-events:auto;position:absolute;top:75px;right:16px;width:min(315px,calc(100vw - 32px));box-sizing:border-box;background:#fffdf6;border:1px solid #e6d7a0;border-radius:20px;box-shadow:0 16px 46px #2d453b38;padding:16px 18px;text-align:center;animation:prank-bonus-appear .38s ease-out both}
+.prank-bonus-gift{font-size:50px;line-height:1.1}.prank-bonus-card small{display:block;color:#8f6c30;font-size:12px;font-weight:900;letter-spacing:1px;margin:7px 0}.prank-bonus-title{display:block;color:#264845;font-size:19px}
+.prank-bonus-card p{color:#245848;font-size:17px;line-height:1.35;font-weight:750;overflow-wrap:anywhere;white-space:pre-wrap;margin:10px 0}
+.prank-bonus-disclaimer{display:block;color:#687771;font-size:12px;margin-top:7px}.prank-bonus-card [hidden]{display:none!important}
+.prank-bonus-actions{display:flex;justify-content:center;gap:8px;margin-top:13px}.prank-bonus-actions button{cursor:pointer;font:inherit;border-radius:9px;border:1px solid #b9d6c7;background:#e8f6ee;color:#245543;padding:7px 12px}.prank-bonus-actions button:first-child{background:#258c6a;color:#fff;border-color:#258c6a}.prank-bonus-card.opened .prank-bonus-gift{transform:scale(1.1)}
+@keyframes prank-bonus-appear{from{opacity:0;transform:translateY(-15px) scale(.93)}to{opacity:1;transform:translateY(0) scale(1)}}
+@media(prefers-reduced-motion:reduce){.prank-plane-runner{animation:none;left:auto;right:12px}.prank-plane-paper,.prank-duck-emoji,.prank-stamp-mark,.prank-bonus-card{animation:none}.prank-duck-runner{animation:none;left:auto;right:12px}.prank-sticker{animation:none;top:var(--sticker-static-top);opacity:1}}
+
 
 
 /* Always-closed navigation and readable, full-width pages. */

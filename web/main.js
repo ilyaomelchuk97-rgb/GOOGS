@@ -12,7 +12,7 @@ function logDate(d){if(!d)return '';return new Date(d.replace(' ','T')+'Z').toLo
 function dayTime(d){if(!d)return '';const date=new Date(d.replace(' ','T')+'Z');return logDate(d)+' · '+date.toLocaleTimeString('ru-RU',{timeZone:'Europe/Minsk',hour:'2-digit',minute:'2-digit'})}
 function dateShift(date,days){let d=new Date(date+'T12:00:00');d.setDate(d.getDate()+days);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 function dayType(day){const d=new Date(day+'T12:00:00').getDay();return d!==0&&d!==6}
-const S={user:null,data:null,month:null,today:null,page:'overview',report:null,logs:null,search:'',userFilter:'',categoryFilter:'',menuOpen:false,modal:null,attendanceChoice:'absent',prankOnline:[],prankTarget:null,presencePeople:[],presenceOnline:false,presenceOpen:false,backupStatus:null,backupPreview:null,backupFile:null,deployCheck:null,saveNotice:null,sotipbHistory:null,sotipbFile:null,sotipbResult:null,chatRoom:'general',chatData:null,chatOrder:{},chatPins:[],vacationYear:null,vacationData:null,vacationPrintOpen:false,vacationFile:null,vacationImportPreview:null,vacationOverrides:{},messageStyle:{},roomDraft:null,chatThemeExpected:null,chatDesignOpen:null,avatarPreview:null,avatarPreviewFocus:null,unread:{direct:{},general:0,groups:{}} ,groups:[],groupEditor:false,calls:[]};
+const S={user:null,data:null,month:null,today:null,page:'overview',report:null,logs:null,search:'',userFilter:'',categoryFilter:'',menuOpen:false,modal:null,attendanceChoice:'absent',prankOnline:[],prankPeople:[],prankTarget:null,presencePeople:[],presenceOnline:false,presenceOpen:false,backupStatus:null,backupPreview:null,backupFile:null,deployCheck:null,saveNotice:null,sotipbHistory:null,sotipbFile:null,sotipbResult:null,chatRoom:'general',chatData:null,chatOrder:{},chatPins:[],vacationYear:null,vacationData:null,vacationPrintOpen:false,vacationFile:null,vacationImportPreview:null,vacationOverrides:{},messageStyle:{},roomDraft:null,chatThemeExpected:null,chatDesignOpen:null,avatarPreview:null,avatarPreviewFocus:null,unread:{direct:{},general:0,groups:{}} ,groups:[],groupEditor:false,calls:[]};
 const avatarCache=new Map();let chatStatusCursor=null,groupStatusCursor=null,chatStatusBusy=false;
 function avatarHTML(person){
  const name=esc(initials(person?.name)),url=person?.avatar_url;
@@ -132,7 +132,7 @@ function chatDecor(raw,frame=false){
  const effect=s.border_effect||0;
  if(effect<21||effect>26)return ornaments;
  const image={21:'snake',22:'comet',23:'firefly',24:'electric',25:'rain',26:'aurora'}[effect];
- return ornaments+`<span class="chat-edge-runner runner-${effect}" aria-hidden="true"><img src="/effect-${image}.png?v=20261022-48" alt="" draggable="false"></span>`;
+ return ornaments+`<span class="chat-edge-runner runner-${effect}" aria-hidden="true"><img src="/effect-${image}.png?v=20261023-51" alt="" draggable="false"></span>`;
 }
 function updateEdgeRunners(){
  document.querySelectorAll('.chat-edge-runner').forEach(runner=>{
@@ -205,7 +205,7 @@ function applyRoomTheme(){
   if(decorations.dataset.signature!==signature){decorations.innerHTML=chatDecor(theme,true);decorations.dataset.signature=signature}}
  updateEdgeRunners();
 }
-function resetChatSession(){if(typeof resetCallUi==='function')resetCallUi();chatStatusCursor=null;groupStatusCursor=null;chatStatusBusy=false;S.groups=[];S.groupEditor=false;S.chatRoom='general';S.chatData=null;S.calls=[];S.unread={direct:{},general:0,groups:{}};S.chatOrder={};S.chatPins=[];S.messageStyle={};S.roomDraft=null;S.chatThemeExpected=null;S.chatDesignOpen=null;clearAvatarCache()}
+function resetChatSession(){if(typeof resetCallUi==='function')resetCallUi();chatStatusCursor=null;groupStatusCursor=null;chatStatusBusy=false;S.groups=[];S.groupEditor=false;S.chatRoom='general';S.chatData=null;S.calls=[];S.prankPeople=[];S.prankOnline=[];S.prankTarget=null;S.unread={direct:{},general:0,groups:{}};S.chatOrder={};S.chatPins=[];S.messageStyle={};S.roomDraft=null;S.chatThemeExpected=null;S.chatDesignOpen=null;clearAvatarCache()}
 let authToken='',tokenInUrl=false;
 try{authToken=sessionStorage.getItem('forma-session')||''}catch{}
 function setToken(token){if((token||'')!==authToken)resetChatSession();authToken=token||'';tokenInUrl=false;try{if(authToken)sessionStorage.setItem('forma-session',authToken);else sessionStorage.removeItem('forma-session')}catch{}}
@@ -238,7 +238,7 @@ function setSaveNotice(text,kind='ok'){
 }
 function notify(message,error=false){const box=document.createElement('div');box.className='toast'+(error?' error':'');box.textContent=message;$('#toast-area').appendChild(box);setTimeout(()=>box.remove(),3600)}
 async function init(){try{let session=await api('/api/session');if(!session.user&&authToken&&!tokenInUrl){tokenInUrl=true;session=await api('/api/session');if(!session.user)setToken('')}S.today=session.today;S.user=session.user;S.month=session.today.slice(0,7);if(S.user){await load();startPrankPolling()}else showLogin()}catch(e){showLogin();notify(e.message,true)}}
-async function load(){S.data=await api('/api/bootstrap?month='+S.month);S.user=S.data.user;S.today=S.data.today;if(S.page==='report'&&isAdmin())S.report=await api('/api/report?month='+S.month);if(S.page==='activity'&&isAdmin())S.logs=await api('/api/logs');if(S.page==='backup'&&isAdmin())S.backupStatus=await api('/api/backup/status');if(S.page==='sotipb'&&isAdmin())S.sotipbHistory=await api('/api/sotipb/history');if(S.page==='chat')await fetchChat(true);if(S.page==='vacation'){S.vacationYear??=Number(S.today.slice(0,4));S.vacationData=await api('/api/vacation?year='+S.vacationYear)}render()}
+async function load(){S.data=await api('/api/bootstrap?month='+S.month);S.user=S.data.user;S.today=S.data.today;if(S.page==='report'&&isAdmin())S.report=await api('/api/report?month='+S.month);if(S.page==='activity'&&isAdmin())S.logs=await api('/api/logs');if(S.page==='backup'&&isAdmin())S.backupStatus=await api('/api/backup/status');if(S.page==='sotipb'&&isAdmin())S.sotipbHistory=await api('/api/sotipb/history');if(S.page==='prank'){const directory=await api('/api/prank/online');S.prankOnline=directory.user_ids;S.prankPeople=directory.users;}if(S.page==='chat')await fetchChat(true);if(S.page==='vacation'){S.vacationYear??=Number(S.today.slice(0,4));S.vacationData=await api('/api/vacation?year='+S.vacationYear)}render()}
 function isAdmin(){return S.user?.role==='admin'}
 function showLogin(){closeAvatarPreview(false);S.user=null;S.menuOpen=false;document.body.classList.remove('menu-open');$('#app').innerHTML=`<div class="login-screen"><div class="login-art"><div class="quote"><div class="hero-kicker login-kicker"><span class="login-pulse-dot" aria-hidden="true"></span>Пространство вашей команды</div><h1>Каждый день —<br><em>результат.</em></h1><p>Отмечайте выполненную работу, следите за графиком и собирайте отчётность без бесконечных таблиц.</p><div class="login-preview">${[31,54,43,72,61,85,64,105,94,127,109,136].map((h,i)=>`<i style="height:${h}px;opacity:${.35+i*.052}"></i>`).join('')}</div></div></div><div class="login-panel"><form id="login-form" class="login-box"><span class="pill">◉ &nbsp;Добро пожаловать</span><h2>Рады вас видеть!</h2><p>Войдите в личный кабинет, чтобы продолжить работу с командой.</p><div class="field"><label for="login-username">Логин</label><input id="login-username" name="username" placeholder="Ваш логин" autocomplete="username" required autofocus></div><div class="field"><label for="login-password">Пароль</label><input id="login-password" name="password" type="password" placeholder="Введите пароль" autocomplete="current-password" required></div><div class="form-error" id="login-error"></div><button type="submit" class="btn primary">Войти в систему ${ic('arrow')}</button><div class="login-foot">Для входа администратора: логин <b>admin</b>, пароль <b>admin</b>. Данные сотрудников — в файле <b>initial_credentials.txt</b>.</div></form></div></div>`}
 const NAV=[['overview','Обзор','grid'],['chat','Чат','message'],['entries','Мои работы','clipboard'],['vacation','Отпуск','calendar'],['sotipb','СОТИПБ','layers'],['report','Сводный отчёт','chart'],['attendance','Табель','calendar'],['team','Сотрудники','users'],['catalog','Каталог работ','layers'],['activity','Журнал действий','history'],['backup','Резервные копии','download'],['prank','Прикол','party']];
@@ -269,7 +269,7 @@ async function refreshPresence(){
  if(!S.presenceOnline)S.presenceOpen=false;
  presenceSeen=Date.now();updatePresenceWidget();
 }
-function navList(){return NAV.filter(([id])=>isAdmin()||!['report','team','catalog','activity','backup','prank','sotipb'].includes(id)).map(([id,label,icon])=>`<button class="nav-link ${S.page===id?'active':''}" data-nav="${id}">${ic(icon)}<span>${label}</span>${id==='chat'?unreadBadge('all'):''}</button>`).join('')}
+function navList(){return NAV.filter(([id])=>isAdmin()||!['report','team','catalog','activity','backup','sotipb'].includes(id)).map(([id,label,icon])=>`<button class="nav-link ${S.page===id?'active':''}" data-nav="${id}">${ic(icon)}<span>${label}</span>${id==='chat'?unreadBadge('all'):''}</button>`).join('')}
 function render(){if(!S.user)return showLogin();document.body.classList.toggle('menu-open',S.menuOpen);const label=NAV.find(n=>n[0]===S.page)?.[1]||'Обзор';$('#app').innerHTML=`<div class="layout"><div id="sidebar-backdrop" class="sidebar-backdrop ${S.menuOpen?'show':''}" data-action="close-menu" aria-hidden="true"></div><aside id="app-sidebar" class="sidebar ${S.menuOpen?'open':''}" aria-label="Навигация по разделам" aria-hidden="${!S.menuOpen}" ${S.menuOpen?'':'inert'}><div class="side-top"><div class="side-title">Отчёт по работе <span>ГООГС СЭОГС</span></div><button class="sidebar-close icon-btn" type="button" data-action="close-menu" title="Закрыть меню" aria-label="Закрыть меню">${ic('x')}</button></div><div class="side-section">Рабочее пространство</div><nav class="nav">${navList()}</nav><div class="side-bottom"><div class="side-note"><div class="note-icon">${ic('sparkle')}</div><b>Всё под контролем</b><p>Работы, табель и отчёты — в одном удобном пространстве команды.</p></div><div class="side-user">${avatarButton(S.user,'avatar','Открыть моё фото профиля')}<div class="meta"><b>${esc(S.user.name)}</b><small>${isAdmin()?'Администратор':'Сотрудник'}</small></div><button title="Выйти" data-action="logout">${ic('logout')}</button></div></div></aside><main class="main"><header class="topbar"><button id="menu-toggle" class="icon-btn mobile-menu" type="button" data-action="menu" title="Открыть меню" aria-label="Открыть меню" aria-controls="app-sidebar" aria-expanded="${S.menuOpen}">${ic('menu')}</button><div class="breadcrumbs">Рабочее пространство <span>/</span> <span>${esc(label)}</span></div>${presenceHTML()}<div class="topbar-right"><span class="top-date">${ic('calendar')} ${new Date(S.today+'T12:00:00').toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric'})}</span><div class="top-divider"></div>${isAdmin()?`<button class="icon-btn" data-modal="password" title="Сменить пароль">${ic('lock')}</button>`:''}${avatarButton(S.user,'avatar avatar-edit-trigger','Открыть моё фото профиля')}</div></header><div class="content"><div id="save-feedback" class="save-feedback ${S.saveNotice?.kind||''}" role="status" ${S.saveNotice?'':'hidden'}><span>${esc(S.saveNotice?.text||'')}</span><button type="button" data-action="save-refresh" ${S.saveNotice?.kind==='conflict'?'':'hidden'}>Обновить данные</button></div>${pageHTML()}</div></main></div><div id="modal-root"></div>`;if(S.modal)renderModal();hydrateAvatars();updateEdgeRunners()}
 function setMenuOpen(open){
  S.menuOpen=!!open;
@@ -323,7 +323,7 @@ function vacationPage(){
  ${importPreview?`<div class="vacation-import-preview"><b>В файле ${importPreview.found} ячеек: новых ${importPreview.new}, уже заполнено ${importPreview.unchanged}.</b><span>Проверьте соответствия до подтверждения. Пустой выбор означает, что эта строка не будет импортирована.</span><div class="vacation-import-mapping">${(importPreview.mapping||[]).map(row=>`<label><span>${esc(row.source)} <small>(${esc(row.reason)})</small></span><select data-vacation-map="${esc(row.source)}"><option value="">Не переносить</option>${(S.vacationData?.people||[]).map(person=>`<option value="${person.id}" ${row.user_id===person.id?'selected':''}>${esc(person.name)}</option>`).join('')}</select></label>`).join('')}</div>${importPreview.unmatched.length?`<strong>Требуют выбора сотрудника: ${esc(importPreview.unmatched.join(', '))}.</strong>`:''}<button class="btn primary" type="button" data-action="vacation-import-confirm" ${importPreview.new?'':'disabled'}>Импортировать ${importPreview.new} новых ячеек</button></div>`:''}</div>`:''}
  <div class="vacation-print-area"><div class="vacation-print-title"><h2>Отпуск · ${year}</h2><span>Годовой план команды</span></div>${table(false)}${table(true)}</div>${printPrompt}`;
 }
-function pageHTML(){switch(S.page){case 'entries':return entriesPage();case 'chat':return chatPage();case 'vacation':return vacationPage();case 'sotipb':return isAdmin()?sotipbPage():overviewPage();case 'report':return reportPage();case 'attendance':return attendancePage();case 'team':return teamPage();case 'catalog':return catalogPage();case 'activity':return activityPage();case 'backup':return isAdmin()?backupPage():overviewPage();case 'prank':return isAdmin()?prankPage():overviewPage();default:return overviewPage()}}
+function pageHTML(){switch(S.page){case 'entries':return entriesPage();case 'chat':return chatPage();case 'vacation':return vacationPage();case 'sotipb':return isAdmin()?sotipbPage():overviewPage();case 'report':return reportPage();case 'attendance':return attendancePage();case 'team':return teamPage();case 'catalog':return catalogPage();case 'activity':return activityPage();case 'backup':return isAdmin()?backupPage():overviewPage();case 'prank':return prankPage();default:return overviewPage()}}
 function monthControl(){return `<div class="month-switch"><button data-action="prev-month" title="Предыдущий месяц">${ic('chevLeft')}</button><strong>${monthName(S.month)}</strong><button data-action="next-month" title="Следующий месяц">${ic('chevRight')}</button></div>`}
 function head(eyebrow,title,subtitle,actions=''){return `<div class="page-head"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p class="subheading">${subtitle}</p></div><div class="actions">${actions}</div></div>`}
 function filteredEntries(){return S.data.entries.filter(e=>(!S.userFilter||String(e.user_id)===S.userFilter)&&(!S.categoryFilter||S.data.tasks.find(t=>t.id===e.task_id)?.category===S.categoryFilter)&&(!S.search||(`${S.data.tasks.find(t=>t.id===e.task_id)?.title||''} ${S.data.users.find(u=>u.id===e.user_id)?.name||''} ${e.note||''}`).toLowerCase().includes(S.search.toLowerCase())))}
@@ -561,21 +561,28 @@ function backupPage(){
  ${status?.safety?.length?`<section class="card card-pad backup-safety"><h3>Автоматические копии перед восстановлением</h3><p>Скачайте их с сервера: на бесплатном хостинге местные файлы не долговечны.</p>${status.safety.map(item=>`<div class="backup-safety-item"><span>${esc(item.name)} · ${(item.size/1024).toFixed(0)} КБ</span><button type="button" class="btn secondary" data-action="backup-safety" data-name="${esc(item.name)}">${ic('download')} Скачать</button></div>`).join('')}</section>`:''}`;
 }
 function prankPage(){
- const people=S.data.users.filter(u=>u.active&&u.is_staff);
- const selected=people.some(u=>u.id===Number(S.prankTarget))?Number(S.prankTarget):people[0]?.id;
+ const people=S.prankPeople;
+ const selected=S.prankTarget!=null&&people.some(u=>u.id===Number(S.prankTarget))?Number(S.prankTarget):
+  people.find(u=>u.id!==S.user?.id&&S.prankOnline.includes(u.id))?.id??
+  people.find(u=>S.prankOnline.includes(u.id))?.id??people[0]?.id;
  S.prankTarget=selected??null;
  const online=S.prankOnline.includes(selected);
- return `${head('ДЛЯ АДМИНИСТРАТОРА / РАЗВЛЕЧЕНИЯ','Прикол','Выберите сотрудника, у которого открыт сайт, и отправьте эффект. Сначала можно испытать его у себя.')}
- <div class="prank-target card"><div class="prank-target-icon">${ic('users')}</div><div class="prank-target-info"><h3>Кому отправить?</h3><p>Эффект появится только у пользователя, который сейчас в сети на этом сайте.</p></div>
- <select id="prank-user" aria-label="Выберите сотрудника" ${people.length?'':'disabled'}>${people.map(u=>`<option value="${u.id}" ${u.id===selected?'selected':''}>${esc(u.name)}</option>`).join('')}</select><span class="prank-presence ${online?'online':''}" id="prank-presence">${online?'● Сейчас в сети':'○ Не в сети'}</span></div>
+ return `${head('ДЛЯ ВСЕХ / РАЗВЛЕЧЕНИЯ','Прикол','Выберите пользователя, у которого открыт сайт, и отправьте эффект. Сначала можно испытать его у себя.')}
+ <div class="prank-target card"><div class="prank-target-icon">${ic('users')}</div><div class="prank-target-info"><h3>Кому отправить?</h3><p>Эффект появится у пользователя с открытой вкладкой Forma. В фоне браузер может замедлять обновление; статус учитывает последние две минуты связи.</p></div>
+ <select id="prank-user" aria-label="Выберите пользователя" ${people.length?'':'disabled'}>${people.map(u=>`<option value="${u.id}" ${u.id===selected?'selected':''}>${esc(u.name)}</option>`).join('')}</select><span class="prank-presence ${online?'online':''}" id="prank-presence">${online?'● Сейчас в сети':'○ Не в сети'}</span></div>
  <div class="prank-cards">
  <section class="card prank-card"><div class="prank-art people-art" aria-hidden="true"><span>🕺</span><span>💃</span><span>🕺</span></div><div class="prank-card-content"><span class="prank-kicker">ЭФФЕКТ 01</span><h2>Прыгающие человечки</h2><p>40 человечков быстро летают по экрану. Каждый отскакивает от краёв 10 раз и исчезает.</p><div class="prank-buttons"><button class="btn secondary" type="button" data-action="prank-test-people">${ic('sparkle')} Тест у себя</button><button class="btn primary prank-send" type="button" data-action="prank-send-people" ${online?'':'disabled'}>${ic('arrow')} Отправить</button></div></div></section>
  <section class="card prank-card"><div class="prank-art speech-art" aria-hidden="true">🔊 <span>Привет!</span></div><div class="prank-card-content"><span class="prank-kicker">ЭФФЕКТ 02</span><h2>Сообщение голосом</h2><p>Текст появится поверх страницы, а голос компьютера попробует прочитать его вслух.</p><label for="prank-text">Текст сообщения</label><textarea id="prank-text" maxlength="400" rows="4" placeholder="Напишите сообщение для сотрудника…"></textarea><div class="prank-buttons"><button class="btn secondary" type="button" data-action="prank-test-speech">${ic('message')} Тест у себя</button><button class="btn primary prank-send" type="button" data-action="prank-send-speech" ${online?'':'disabled'}>${ic('arrow')} Отправить</button></div></div></section>
  <section class="card prank-card"><div class="prank-art cat-art" aria-hidden="true"><div class="prank-cat-sprite"></div></div><div class="prank-card-content"><span class="prank-kicker">ЭФФЕКТ 03</span><h2>Кот-курьер</h2><p>Рыжий посыльный пробежит по нижнему краю экрана и принесёт ваше короткое сообщение. Не мешает работе.</p><label for="prank-cat-text">Послание кота</label><input id="prank-cat-text" type="text" maxlength="140" value="Кот-курьер принёс вам хорошее настроение!" placeholder="Что передать сотруднику?"><div class="prank-buttons"><button class="btn secondary" type="button" data-action="prank-test-cat">${ic('sparkle')} Тест у себя</button><button class="btn primary prank-send" type="button" data-action="prank-send-cat" ${online?'':'disabled'}>${ic('arrow')} Отправить</button></div></div></section>
  <section class="card prank-card"><div class="prank-art achievement-art" aria-hidden="true"><span class="achievement-art-icon">🏆</span><span class="achievement-art-label">Достижение!</span>✨</div><div class="prank-card-content"><span class="prank-kicker">ЭФФЕКТ 04</span><h2>Достижение разблокировано</h2><p>Праздничная плашка с небольшим конфетти. Название придумайте сами — без оценок результатов и персональных данных.</p><label for="prank-achievement-text">Название достижения</label><input id="prank-achievement-text" type="text" maxlength="80" value="Повелитель таблиц" placeholder="Например: Король пятницы"><div class="prank-buttons"><button class="btn secondary" type="button" data-action="prank-test-achievement">${ic('sparkle')} Тест у себя</button><button class="btn primary prank-send" type="button" data-action="prank-send-achievement" ${online?'':'disabled'}>${ic('arrow')} Отправить</button></div></div></section>
  <section class="card prank-card"><div class="prank-art parade-art" aria-hidden="true"><span>🚶</span><span>💃</span><span>🚶</span><span>🕺</span><span>🚶</span></div><div class="prank-card-content"><span class="prank-kicker">ЭФФЕКТ 05</span><h2>Мини-парад</h2><p>Небольшая весёлая процессия марширует по нижнему краю экрана и уходит сама через несколько секунд.</p><div class="prank-buttons"><button class="btn secondary" type="button" data-action="prank-test-parade">${ic('sparkle')} Тест у себя</button><button class="btn primary prank-send" type="button" data-action="prank-send-parade" ${online?'':'disabled'}>${ic('arrow')} Отправить</button></div></div></section>
+ <section class="card prank-card"><div class="prank-art plane-art" aria-hidden="true"><span>✉️</span><span>✈</span></div><div class="prank-card-content"><span class="prank-kicker">ЭФФЕКТ 06</span><h2>Бумажный самолётик</h2><p>Прилетит, остановится на несколько секунд и покажет короткое послание. Рабочие кнопки остаются доступными.</p><label for="prank-plane-text">Послание самолётика</label><input id="prank-plane-text" type="text" maxlength="140" value="Лови хорошую новость — ты отлично справляешься!" placeholder="Что передать?"><div class="prank-buttons"><button class="btn secondary" type="button" data-action="prank-test-plane">${ic('sparkle')} Тест у себя</button><button class="btn primary prank-send" type="button" data-action="prank-send-plane" ${online?'':'disabled'}>${ic('arrow')} Отправить</button></div></div></section>
+ <section class="card prank-card"><div class="prank-art stamp-art" aria-hidden="true"><span>ОДОБРЕНО!</span></div><div class="prank-card-content"><span class="prank-kicker">ЭФФЕКТ 07</span><h2>Печать «Одобрено!»</h2><p>Весёлая красная печать на несколько секунд покажет вашу короткую надпись. Ничего на сайте не утверждает.</p><label for="prank-stamp-text">Надпись на печати</label><input id="prank-stamp-text" type="text" maxlength="65" value="Пятница одобрена!" placeholder="Например: Улыбка одобрена"><div class="prank-buttons"><button class="btn secondary" type="button" data-action="prank-test-stamp">${ic('sparkle')} Тест у себя</button><button class="btn primary prank-send" type="button" data-action="prank-send-stamp" ${online?'':'disabled'}>${ic('arrow')} Отправить</button></div></div></section>
+ <section class="card prank-card"><div class="prank-art duck-art" aria-hidden="true"><span>🦆</span><span>Кря?</span></div><div class="prank-card-content"><span class="prank-kicker">ЭФФЕКТ 08</span><h2>Важная утка</h2><p>Утка пройдёт внизу с вашим сообщением. Никакого звука без нажатия получателем кнопки «Кря!».</p><label for="prank-duck-text">Реплика утки</label><input id="prank-duck-text" type="text" maxlength="100" value="Срочная новость: вы молодец!" placeholder="Что передать от утки?"><div class="prank-buttons"><button class="btn secondary" type="button" data-action="prank-test-duck">${ic('sparkle')} Тест у себя</button><button class="btn primary prank-send" type="button" data-action="prank-send-duck" ${online?'':'disabled'}>${ic('arrow')} Отправить</button></div></div></section>
+ <section class="card prank-card"><div class="prank-art sticker-art" aria-hidden="true"><span>⭐</span><span>💗</span><span>⭐</span></div><div class="prank-card-content"><span class="prank-kicker">ЭФФЕКТ 09</span><h2>Дождь из стикеров</h2><p>Звёзды или сердечки ненадолго появятся у краёв экрана, не закрывая рабочую область.</p><label for="prank-stickers-theme">Какие стикеры?</label><select id="prank-stickers-theme" aria-label="Выберите стикеры"><option value="stars">Звёзды ⭐</option><option value="hearts">Сердечки 💗</option></select><div class="prank-buttons"><button class="btn secondary" type="button" data-action="prank-test-stickers">${ic('sparkle')} Тест у себя</button><button class="btn primary prank-send" type="button" data-action="prank-send-stickers" ${online?'':'disabled'}>${ic('arrow')} Отправить</button></div></div></section>
+ <section class="card prank-card"><div class="prank-art bonus-art" aria-hidden="true"><span>🎁</span><span>?</span></div><div class="prank-card-content"><span class="prank-kicker">ЭФФЕКТ 10</span><h2>Найден секретный бонус</h2><p>Получатель откроет маленькую подарочную карточку и прочитает ваше сообщение. Никаких настоящих баллов.</p><label for="prank-bonus-text">Послание внутри</label><input id="prank-bonus-text" type="text" maxlength="120" value="Ваш бонус: пять минут хорошего настроения!" placeholder="Что внутри подарка?"><div class="prank-buttons"><button class="btn secondary" type="button" data-action="prank-test-bonus">${ic('sparkle')} Тест у себя</button><button class="btn primary prank-send" type="button" data-action="prank-send-bonus" ${online?'':'disabled'}>${ic('arrow')} Отправить</button></div></div></section>
  </div>
- <div class="prank-hint">${ic('info')} Эффекты видит только выбранный сотрудник с открытой вкладкой. Новые анимации короткие, не перехватывают клики и учитывают настройку уменьшения движения. Для голосового сообщения нужен включённый звук: если он недоступен, текст остаётся на экране.</div>`
+ <div class="prank-hint">${ic('info')} Эффекты видит только выбранный пользователь с открытой вкладкой. Новые анимации короткие, не перехватывают клики и учитывают настройку уменьшения движения. Для голосового сообщения нужен включённый звук: если он недоступен, текст остаётся на экране.</div>`
 }
 function teamPage(){let people=S.data.users;return `${head('КОМАНДА','Сотрудники','Создавайте аккаунты, управляйте доступом и следите за результатами.',`<button class="btn primary" data-modal="user">${ic('plus')} Добавить сотрудника</button>`)}<div class="team-grid">${people.map(u=>{let ent=S.data.entries.filter(e=>e.user_id===u.id),hours=ent.reduce((a,e)=>a+Number(e.quantity)*Number(S.data.tasks.find(t=>t.id===e.task_id)?.norm||0),0);return `<div class="team-card ${u.active?'':'inactive'}"><div class="team-card-top">${avatarButton(u,'avatar')}<span class="badge ${u.active?'green':'gray'}">${u.active?'● Активен':'● Отключён'}</span></div><h3>${esc(u.name)}</h3><p>@${esc(u.username)}${u.role==='admin'?' · Администратор':''}</p><div class="team-card-footer"><span>${ent.length} записей · ${fmt(hours)} ч</span><div><button class="table-icon-btn" title="Изменить сотрудника и права" data-modal="edit-user" data-id="${u.id}">${ic('edit')}</button><button class="table-icon-btn ${u.active?'danger':''}" title="${u.active?'Отключить':'Включить'}" data-action="toggle-user" data-id="${u.id}">${ic(u.active?'lock':'check')}</button></div></div></div>`}).join('')}</div><div class="settings-area"><div class="stat-icon mint">${ic('lock')}</div><div><b style="font-size:11px">Доступ к данным</b><p>Сотрудник меняет только данные в «Мои работы»; табель доступен ему для просмотра. Администратор управляет командой и видит общий отчёт.</p></div></div>`}
 function catalogPage(){let tasks=S.data.tasks.filter(t=>!S.search||t.title.toLowerCase().includes(S.search.toLowerCase())||t.category.toLowerCase().includes(S.search.toLowerCase()));return `${head('СПРАВОЧНИК','Каталог работ','Один общий список для всей команды. Добавленные работы сразу доступны сотрудникам.',`<button class="btn primary" data-modal="task">${ic('plus')} Новая работа</button>`)}<div class="card"><div class="filter-bar"><div class="search-input">${ic('search')}<input data-filter="search" value="${esc(S.search)}" placeholder="Найти вид работы…"></div><span class="count-chip">${S.data.tasks.filter(t=>t.active).length} активных работ</span></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Выполняемая работа</th><th>Направление</th><th>Ед. изм.</th><th>Норма, ч</th><th>Статус</th><th class="right">Действия</th></tr></thead><tbody>${tasks.map(t=>`<tr><td><div class="truncate strong" title="${esc(t.title)}">${esc(t.title)}</div></td><td><span class="badge blue">${esc(t.category)}</span></td><td class="muted">${esc(t.unit)}</td><td class="num">${fmt(t.norm,3)}</td><td><span class="badge ${t.active?'green':'gray'}">${t.active?'Активна':'Архив'}</span></td><td class="right"><button class="table-icon-btn" title="Редактировать" data-modal="edit-task" data-id="${t.id}">${ic('edit')}</button><button class="table-icon-btn ${t.active?'danger':''}" title="${t.active?'Архивировать':'Восстановить'}" data-action="toggle-task" data-id="${t.id}">${ic(t.active?'trash':'check')}</button></td></tr>`).join('')}</tbody></table></div><div class="table-footer">${tasks.length} работ · Архивирование сохраняет историю выполненных работ в отчётах</div></div>`}
@@ -653,7 +660,7 @@ function renderModal(){let root=$('#modal-root');if(!root)return;let m=S.modal;i
  }else if(m.type==='password'){
  html=modalFrame('Сменить пароль','Новый пароль будет нужен при следующем входе.',`${field('old','Текущий пароль','password','','required autocomplete="current-password"')}${field('new','Новый пароль','password','','minlength="8" required autocomplete="new-password"')}`,'Сменить пароль');
  }root.innerHTML=html;if(m.type==='avatar')hydrateAvatars();root.querySelector('input,select,textarea')?.focus()}
-async function navigate(page){const wasMenuOpen=S.menuOpen;if(wasMenuOpen)setMenuOpen(false);if(page!=='chat'){stopChatPolling();S.chatDesignOpen=null;S.roomDraft=null}S.modal=null;S.page=page;S.search='';S.userFilter='';S.categoryFilter='';if(page==='report'&&isAdmin())S.report=await api('/api/report?month='+S.month);if(page==='activity'&&isAdmin())S.logs=await api('/api/logs');if(page==='backup'&&isAdmin())S.backupStatus=await api('/api/backup/status');if(page==='sotipb'&&isAdmin())S.sotipbHistory=await api('/api/sotipb/history');if(page==='prank'&&isAdmin())S.prankOnline=(await api('/api/prank/online')).user_ids;if(page==='chat')await fetchChat(true);if(page==='vacation'){S.vacationYear??=Number(S.today.slice(0,4));S.vacationData=await api('/api/vacation?year='+S.vacationYear)}render();if(page==='chat'){startChatPolling();const box=$('#chat-messages');if(box)box.scrollTop=box.scrollHeight}if(wasMenuOpen)$('#menu-toggle')?.focus({preventScroll:true});window.scrollTo({top:0,behavior:'smooth'})}
+async function navigate(page){const wasMenuOpen=S.menuOpen;if(wasMenuOpen)setMenuOpen(false);if(page!=='chat'){stopChatPolling();S.chatDesignOpen=null;S.roomDraft=null}S.modal=null;S.page=page;S.search='';S.userFilter='';S.categoryFilter='';if(page==='report'&&isAdmin())S.report=await api('/api/report?month='+S.month);if(page==='activity'&&isAdmin())S.logs=await api('/api/logs');if(page==='backup'&&isAdmin())S.backupStatus=await api('/api/backup/status');if(page==='sotipb'&&isAdmin())S.sotipbHistory=await api('/api/sotipb/history');if(page==='prank'){const directory=await api('/api/prank/online');S.prankOnline=directory.user_ids;S.prankPeople=directory.users;}if(page==='chat')await fetchChat(true);if(page==='vacation'){S.vacationYear??=Number(S.today.slice(0,4));S.vacationData=await api('/api/vacation?year='+S.vacationYear)}render();if(page==='chat'){startChatPolling();const box=$('#chat-messages');if(box)box.scrollTop=box.scrollHeight}if(wasMenuOpen)$('#menu-toggle')?.focus({preventScroll:true});window.scrollTo({top:0,behavior:'smooth'})}
 function closeModal(){S.modal=null;$('#modal-root')?.replaceChildren()}
 async function saveModal(form){const m=S.modal,fd=new FormData(form),data=Object.fromEntries(fd.entries());const sheetX=$('.work-sheet-scroll')?.scrollLeft||0;try{form.querySelector('button[type=submit]').disabled=true;if(m.type==='avatar'){
    const file=data.file,url=String(data.url||'').trim();
@@ -747,7 +754,7 @@ let prankInterval=null,prankCursor=null,prankBusy=false,prankTimer=null,prankFra
 function startPrankPolling(){
  if(prankInterval||!S.user)return;
  prankCursor=null;presenceSeen=0;setPresenceOffline();
- pollPranks();prankInterval=setInterval(()=>{if(presenceSeen&&Date.now()-presenceSeen>12000)setPresenceOffline();pollPranks()},3000);
+ pollPranks();prankInterval=setInterval(()=>{if(presenceSeen&&Date.now()-presenceSeen>135000)setPresenceOffline();pollPranks()},3000);
 }
 function stopPrankPolling(){if(prankInterval)clearInterval(prankInterval);prankInterval=null;prankCursor=null;presenceSeen=0;setPresenceOffline()}
 async function pollPranks(){
@@ -758,8 +765,8 @@ async function pollPranks(){
   prankCursor=result.last_id;
   await refreshPresence();
   for(const event of result.events)playPrank(event.kind,event.body);
-  if(S.page==='prank'&&isAdmin()){
-   S.prankOnline=(await api('/api/prank/online')).user_ids;
+  if(S.page==='prank'){
+   const directory=await api('/api/prank/online');S.prankOnline=directory.user_ids;S.prankPeople=directory.users;
    updatePrankPresence();
   }
  }catch(e){setPresenceOffline();console.warn('Связь временно недоступна',e.message)}finally{prankBusy=false;try{await pollChatStatus()}catch(e){console.warn('Счётчики чата временно недоступны',e.message)}}
@@ -864,15 +871,55 @@ function playPrank(kind,text=''){
   });
   document.body.appendChild(layer);
   prankTimer=setTimeout(clearPrankEffect,7900);
+ }else if(kind==='plane'){
+  layer.classList.add('prank-plane-layer');layer.setAttribute('role','status');
+  layer.innerHTML='<div class="prank-plane-runner"><div class="prank-plane-paper" aria-hidden="true">✈</div><div class="prank-plane-note"><small>ВАМ ПРИЛЕТЕЛО ПИСЬМО</small><strong></strong></div></div>';
+  layer.querySelector('.prank-plane-note strong').textContent=String(text||'').slice(0,140);
+  document.body.appendChild(layer);
+  prankTimer=setTimeout(clearPrankEffect,8200);
+ }else if(kind==='stamp'){
+  layer.classList.add('prank-stamp-layer');layer.setAttribute('role','status');
+  layer.innerHTML='<div class="prank-stamp-mark"><span class="prank-stamp-icon" aria-hidden="true">✓</span><small>ШУТОЧНАЯ ПЕЧАТЬ</small><strong></strong></div>';
+  layer.querySelector('.prank-stamp-mark strong').textContent=String(text||'').slice(0,65);
+  document.body.appendChild(layer);
+  prankTimer=setTimeout(clearPrankEffect,6500);
+ }else if(kind==='duck'){
+  layer.classList.add('prank-duck-layer');layer.setAttribute('role','status');
+  layer.innerHTML='<div class="prank-duck-runner"><div class="prank-duck-note"><small>СРОЧНО ОТ ВАЖНОЙ УТКИ</small><strong></strong><button type="button" data-action="prank-duck-sound" aria-label="Произнести кря">Кря! 🔊</button></div><span class="prank-duck-emoji" role="img" aria-label="Утка">🦆</span></div>';
+  layer.querySelector('.prank-duck-note strong').textContent=String(text||'').slice(0,100);
+  document.body.appendChild(layer);
+  prankTimer=setTimeout(clearPrankEffect,8900);
+ }else if(kind==='stickers'){
+  layer.classList.add('prank-stickers-layer');layer.setAttribute('role','status');
+  layer.setAttribute('aria-label',text==='hearts'?'Дождь из сердечек':'Дождь из звёзд');
+  const symbol=text==='hearts'?'💗':'⭐';
+  for(let i=0;i<20;i++){
+   const sticker=document.createElement('span');sticker.className='prank-sticker';sticker.textContent=symbol;
+   sticker.style.setProperty('--sticker-x',i%2?`calc(100% - ${18+(i*13)%46}px)`:`${8+(i*19)%38}px`);
+   sticker.style.setProperty('--sticker-delay',`${(i%10)*.32}s`);
+   sticker.style.setProperty('--sticker-duration',`${3+(i%3)*.35}s`);
+   sticker.style.setProperty('--sticker-turn',i%2?'-24deg':'26deg');
+   sticker.style.setProperty('--sticker-static-top',`${8+(i%10)*8}%`);
+   layer.appendChild(sticker);
+  }
+  document.body.appendChild(layer);
+  prankTimer=setTimeout(clearPrankEffect,6900);
+ }else if(kind==='bonus'){
+  layer.classList.add('prank-bonus-layer');layer.setAttribute('role','status');
+  layer.innerHTML='<div class="prank-bonus-card"><div class="prank-bonus-gift" aria-hidden="true">🎁</div><small>НАЙДЕН СЕКРЕТНЫЙ БОНУС</small><strong class="prank-bonus-title">Открыть подарок?</strong><p class="prank-bonus-text" hidden></p><span class="prank-bonus-disclaimer" hidden>Шутка! Баллы и данные не изменились.</span><div class="prank-bonus-actions"><button type="button" data-action="prank-bonus-open">Открыть ✨</button><button type="button" data-action="prank-close" aria-label="Закрыть бонус">Закрыть</button></div></div>';
+  layer.querySelector('.prank-bonus-text').textContent=String(text||'').slice(0,120);
+  document.body.appendChild(layer);
+  prankTimer=setTimeout(clearPrankEffect,11000);
  }
 }
 async function sendPrank(kind,button){
- if(!isAdmin())return;
+ if(!S.user)return;
  const target=Number($('#prank-user')?.value);
- const inputId={speech:'prank-text',cat:'prank-cat-text',achievement:'prank-achievement-text'}[kind];
+ const inputId={speech:'prank-text',cat:'prank-cat-text',achievement:'prank-achievement-text',
+  plane:'prank-plane-text',stamp:'prank-stamp-text',duck:'prank-duck-text',bonus:'prank-bonus-text',stickers:'prank-stickers-theme'}[kind];
  const text=inputId?($('#'+inputId)?.value.trim()||''):'';
- if(inputId&&!text){notify(kind==='achievement'?'Введите название достижения':'Сначала введите текст сообщения',true);$('#'+inputId)?.focus();return}
- if(!button.dataset.action.startsWith('prank-test-')&&!target){notify('Выберите сотрудника',true);return}
+ if(inputId&&!text){notify('Сначала заполните поле эффекта',true);$('#'+inputId)?.focus();return}
+ if(!button.dataset.action.startsWith('prank-test-')&&!target){notify('Выберите пользователя',true);return}
  if(button.dataset.action.startsWith('prank-test-')){playPrank(kind,text);return}
  button.disabled=true;
  try{const result=await api('/api/prank/send','POST',{user_id:target,kind,text});notify('Отправлено: '+result.name)}
@@ -972,10 +1019,17 @@ document.addEventListener('click',async e=>{if(S.presenceOpen&&!e.target.closest
  if(btn.dataset.action==='chat-older'){const data=S.chatData,oldest=data?.messages[0]?.id;if(!data?.hasMore||!oldest)return;const box=$('#chat-messages'),height=box.scrollHeight,top=box.scrollTop;btn.disabled=true;try{const result=await api('/api/chat?room='+encodeURIComponent(data.room)+'&before='+oldest);if(S.chatRoom!==data.room||!S.chatData)return;S.chatData.messages=[...result.messages,...S.chatData.messages];S.chatData.hasMore=result.has_more;updateChatView();box.scrollTop=box.scrollHeight-height+top}catch(err){notify(err.message,true);btn.disabled=false}return}
  if(btn.dataset.action==='presence-toggle'){if(!S.presenceOnline)return;S.presenceOpen=!S.presenceOpen;updatePresenceWidget();if(S.presenceOpen)try{await refreshPresence()}catch{setPresenceOffline()}return}
  if(btn.dataset.action==='prank-close'){clearPrankEffect();return}
+ if(btn.dataset.action==='prank-duck-sound'){if(!speakPrank('Кря!'))notify('Голос недоступен в этом браузере',true);return}
+ if(btn.dataset.action==='prank-bonus-open'){
+  const card=btn.closest('.prank-bonus-card');
+  if(card){card.classList.add('opened');card.querySelector('.prank-bonus-title').textContent='Вот что внутри:';
+   card.querySelector('.prank-bonus-text').hidden=false;card.querySelector('.prank-bonus-disclaimer').hidden=false;
+   btn.remove();clearTimeout(prankTimer);prankTimer=setTimeout(clearPrankEffect,12000)}return
+ }
  if(btn.dataset.action==='prank-replay'){speakPrank(prankSpeechText);return}
  if(btn.dataset.action?.startsWith('prank-test-')||btn.dataset.action?.startsWith('prank-send-')){
   const kind=btn.dataset.action.replace(/^prank-(?:test|send)-/,'');
-  if(['people','speech','cat','achievement','parade'].includes(kind))await sendPrank(kind,btn);
+  if(['people','speech','cat','achievement','parade','plane','stamp','duck','stickers','bonus'].includes(kind))await sendPrank(kind,btn);
   return
  }
  if(btn.dataset.action==='close-modal'){if(btn.classList.contains('modal-backdrop')&&e.target!==btn)return;closeModal();return}
@@ -1109,7 +1163,7 @@ document.addEventListener('keydown',e=>{
    if(!changed){if(next){next.focus();next.select()}S.gridNext=null}
  }
 });
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&S.user){pollPranks();if(S.page==='chat')pollChat()}});
+document.addEventListener('visibilitychange',()=>{if(S.user){pollPranks();if(!document.hidden&&S.page==='chat')pollChat()}});
 window.addEventListener('resize',updateEdgeRunners);
 window.addEventListener('offline',setPresenceOffline);window.addEventListener('online',()=>{if(S.user){pollPranks();if(S.page==='chat')pollChat()}});
 init();
