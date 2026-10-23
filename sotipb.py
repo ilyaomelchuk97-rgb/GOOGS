@@ -80,6 +80,49 @@ def _type(row,group,warnings):
             return ''
     return types[0] if len(types)==1 or len(set(types))==1 else '\n'.join(f'{t} ({"было" if i==0 else "стало"})' for i,t in enumerate(types))
 
+def _length(row,warnings):
+    # Existing Q is a fallback only for an empty F; explicit Q content is
+    # already a ready-to-use summary value and is not reformatted.
+    if not row[5]:return row.raw[16] if row[16] else ''
+    text=row[5]
+    if '/' not in text:return row.raw[5]
+    if text.count('/')!=1 or not all(part.strip() for part in text.split('/')):
+        warnings.append(f'Строка {row.number}: F содержит неоднозначное разделение «/»; значение оставлено без преобразования')
+        return row.raw[5]
+    old,new=(part.strip() for part in text.split('/'))
+    return f'{old} (было)\n{new} (стало)'
+
+_DIAMETER_NUMBER=re.compile(
+    r'\s*(?:[dDØø⌀Фф]\s*|Ду\s*)?(\d+(?:[.,]\d+)?)\s*'
+    r'(?:мм\.?|mm\.?|пэ|пе|ст|сталь|стальной|полиэтилен(?:овый)?)?\s*',re.I)
+
+def _diameter(row,warnings):
+    # Existing R is a ready-to-use fallback only for an empty E.
+    if not row[4]:return row.raw[17] if row[17] else ''
+    text=row[4]
+    if text.count('/')>1:
+        warnings.append(f'Строка {row.number}: в E более двух диаметров; D свода оставлен пустым, уточните E')
+        return ''
+    parts=[part.strip() for part in text.split('/')]
+    if not all(parts):
+        warnings.append(f'Строка {row.number}: неполное значение E; D свода оставлен пустым, уточните E')
+        return ''
+    numbers=[]
+    for part in parts:
+        match=_DIAMETER_NUMBER.fullmatch(part)
+        if not match:
+            warnings.append(f'Строка {row.number}: диаметр «{part[:40]}» не является однозначным числом; D свода оставлен пустым, уточните E')
+            return ''
+        numbers.append(match.group(1))
+    layers=[part.strip() for part in row[7].split('/')]
+    if len(layers)>2 or len(layers)==2 and len(numbers)!=2:
+        warnings.append(f'Строка {row.number}: значения H не соответствуют E; проверьте вид прокладки')
+    def label(number,index):
+        layer=layers[min(index,len(layers)-1)] if layers else ''
+        return (number+' '+layer).strip()
+    if len(numbers)==1:return label(numbers[0],0)
+    return label(numbers[0],0)+' (было)\n'+label(numbers[1],1)+' (стало)'
+
 def _year(text):return text[:-2] if text.endswith('.0') and text[:-2].isdigit() else text
 
 def _safe_write(cell,value):
@@ -107,7 +150,7 @@ def _source_style(sheet):
 
 def template():
     book=Workbook();sheet=book.active;sheet.title='лист 1';_source_style(sheet)
-    hints={2:'Архивный номер, если C пуст. Например: 5-65/2',3:'Новый архивный номер: при наличии он имеет приоритет над B',4:'Адрес ПОО',5:'Дословно переносится в D свода. Например: 159ст или 600/630',6:'Дословно переносится в C свода. Например: 3.3/0.2',7:'нд, сд, вд1 или В2',8:'подземный или надземный'}
+    hints={2:'Архивный номер, если C пуст. Например: 5-65/2',3:'Новый архивный номер: при наличии он имеет приоритет над B',4:'Адрес ПОО',5:'Число + вид прокладки H в D свода; для 600/630 — две строки с было/стало',6:'Для 3.3/0.2 в C свода — две строки: 3.3 (было), 0.2 (стало)',7:'нд, сд, вд1 или В2',8:'подземный или надземный'}
     for col,example in hints.items():sheet.cell(1,col).comment=Comment('Вводите данные начиная со строки 2. '+example+'; пустые ячейки допускаются, но в своде не будут заполняться догадками.','Forma')
     stream=io.BytesIO();book.save(stream);book.close();return stream.getvalue()
 
@@ -171,11 +214,11 @@ def convert(blob):
                 address=row[3]
                 number=row[2] or row[1]
                 if number:address+='\n('+('нов. арх. № ' if row[2] else 'арх. № ')+number+')'
-                # E and F are copied verbatim, including material, slash-separated
-                # values, spaces and numeric types. Q/R remain fallback values only
-                # when the corresponding original cell is empty.
-                length=row.raw[5] if row[5] else (row.raw[16] if row[16] else '')
-                diameter=row.raw[4] if row[4] else (row.raw[17] if row[17] else '')
+                # F splits into labeled old/new lengths. E supplies numeric
+                # diameters, with the corresponding laying method from H.
+                # Q/R remain fallback values only when F/E are empty.
+                length=_length(row,warnings)
+                diameter=_diameter(row,warnings)
                 year=row.raw[10] if isinstance(row.raw[10],(int,float)) and not isinstance(row.raw[10],bool) else _year(row[10])
                 output=[dtype,address,length,diameter,row[9],year,row[11],'','','']
                 for col,text in enumerate(output,1):
@@ -185,6 +228,11 @@ def convert(blob):
                     cell._style=copy(body_styles[col-1])
                     if isinstance(text,str) and '\n' in text and not cell.alignment.wrap_text:
                         aligned=copy(cell.alignment);aligned.wrap_text=True;cell.alignment=aligned
+                # Ensure both lines are visible, not merely present in the XLSX XML.
+                visible_lines=max((value.count('\n')+1 for value in output if isinstance(value,str)),default=1)
+                if visible_lines>1:
+                    current=summary.row_dimensions[line].height or summary.sheet_format.defaultRowHeight or 15
+                    summary.row_dimensions[line].height=max(current,visible_lines*16+5)
                 line+=1
             end=line-1
             # Merge only shared, identical group values; preserve differing types and
